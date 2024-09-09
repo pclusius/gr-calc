@@ -337,13 +337,9 @@ def max_con_modefit(): #in ranges where mode fitting has succeeded, use these po
     df_mfit_con = df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]]
     
     #PROBLEM IS THAT THERE ARE NO COLUMNS THAT FALL INTO THE WANTED DIAMETER RANGE
+    print("test")
     print("HERE",df_mfit_con)
     print((df.columns <= end_diam))
-
-
-
-#dm160612.sum
-#max_con_modefit()
 
         
 def plot(dataframe):
