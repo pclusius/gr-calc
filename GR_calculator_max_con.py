@@ -313,35 +313,39 @@ def closest(list, number): #find closes element to a given value in list, return
         value.append(abs(number-i))
     return value.index(min(value))
 
-"""
-def max_con_modefit(): #in ranges where mode fitting has succeeded, use these points to calculate the maximum concentration
+
+def maxcon_modefit(): #in ranges where mode fitting has succeeded, use these points to calculate the maximum concentration
     df_GR_values = pd.DataFrame(pd.read_csv("./Gr_final.csv",sep=',',engine='python')) #open calculated values in Gabi's code
     my_GR = df_GR_values.iloc[12,:]  #choose interesting growth rate, now defined in row 14 (14-2=12)
 
-    start_time = my_GR["start"] #take values from 
+    #start and end times/diameters of fitted lines
+    start_time = my_GR["start"] 
     end_time = my_GR["end"]
     start_diam = my_GR["d_initial"]
     end_diam = my_GR["d_final"]
 
+    #make the ranges bigger with given parameters
+    start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S") - timedelta(hours=5) #5 hours
+    end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S") + timedelta(hours=5)
+    start_diam = start_diam / 1.5 #factor of 1.5
+    end_diam = end_diam * 1.5
+
+    #make a df with wanted range
+    df_range = df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)]
+    df_range = df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]]
+    print("HERE2",df_range)
+
+    #calculate deriv, then make new threshold
+
     #find GR area within the concentration values
-    df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)] #filter with time
-
-    #if no values fall into the given range pick nearby two values
-    if len(df_mfit_con.columns) == 0:
-        df_mfit_con.columns = [df.columns[closest(df.columns,start_diam)],df.columns[closest(df.columns,end_diam)]]
+    #df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)] #filter with time
     
     
-    print("HERE2",df_mfit_con)
     #df_mfit_con = df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]]
-    #print("HERE1",len(df_mfit_con.columns))
-
-    
-        #df_mfit_con.columns.append(df.columns[closest(df.columns,start_diam)])
-        #df_mfit_con.columns.append(df.columns[closest(df.columns,end_diam)])
     
     #print("HERE2",df_mfit_con)
-max_con_modefit()
-"""   
+maxcon_modefit()
+ 
 
 def plot(dataframe):
     #plot line when day changes
@@ -356,7 +360,7 @@ def plot(dataframe):
     plt.xlim(dataframe.index[2],dataframe.index[-3])
     plt.show()
 
-plot(df)
+#plot(df)
 
 
 
