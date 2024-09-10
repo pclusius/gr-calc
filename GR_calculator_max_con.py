@@ -341,9 +341,11 @@ def max_con_modefit(): #in ranges where mode fitting has succeeded, use these po
     df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)]
     df_mfit_con = df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]]
     print("HERE1",len(df_mfit_con.columns))
+
     #if no values fall into the given range pick nearby two values
     if len(df_mfit_con.columns) == 0:
         df_mfit_con.columns = [df.columns[closest(df.columns,start_diam)],df.columns[closest(df.columns,end_diam)]]??
+        
     
     print("HERE2",df_mfit_con)
 
