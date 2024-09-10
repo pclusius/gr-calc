@@ -45,7 +45,6 @@ df.rename(columns=dict(zip(df.columns[[0,1]], ["time (d)", "total number concent
 df = df.drop(['total number concentration (N)'], axis=1) #drop total N concentrations from the dataframe as they're not needed
 time_d = df['time (d)'].values.astype(float) #save time as days before changing them to UTC
 
-
 #change days into UTC (assuming time is in "days from start of measurement") for a dataframe
 def df_days_into_UTC(dataframe):
     time_steps = dataframe["time (d)"] - time_d[0]
@@ -76,18 +75,6 @@ df.columns = pd.to_numeric(df.columns) * 10**9 #change units of diameters from m
 ####################################################
 
 """
-def local_max_min(dataframe):
-    df_max = pd.DataFrame(0, index=dataframe.index, columns=dataframe.columns) #dataframes with the same size as df and values of 0 initially
-    df_min = pd.DataFrame(0, index=dataframe.index, columns=dataframe.columns)
-    for i in dataframe.columns:
-        #comparing to datapoints 2 before and 2 after (same window as median filter 5), returns boolean
-        local_max = (dataframe[i] > dataframe[i].shift(2)) & (dataframe[i] > dataframe[i].shift(-2))
-        local_min = (dataframe[i] < dataframe[i].shift(2)) & (dataframe[i] < dataframe[i].shift(-2))
-        
-        #filling new dataframes with maxima and minima, True = df[i] and False = nan
-        df_max[i] = dataframe[i].where(local_max, np.nan)
-        df_min[i] = dataframe[i].where(local_min, np.nan)
-    return df_max,df_min
 def slopes(dataframe):
     df_slopes = pd.DataFrame()
     for j in dataframe.columns:
@@ -326,6 +313,7 @@ def closest(list, number): #find closes element to a given value in list, return
         value.append(abs(number-i))
     return value.index(min(value))
 
+"""
 def max_con_modefit(): #in ranges where mode fitting has succeeded, use these points to calculate the maximum concentration
     df_GR_values = pd.DataFrame(pd.read_csv("./Gr_final.csv",sep=',',engine='python')) #open calculated values in Gabi's code
     my_GR = df_GR_values.iloc[12,:]  #choose interesting growth rate, now defined in row 14 (14-2=12)
@@ -336,21 +324,25 @@ def max_con_modefit(): #in ranges where mode fitting has succeeded, use these po
     end_diam = my_GR["d_final"]
 
     #find GR area within the concentration values
-    #modefit_con_time = df.index[(df.index > start_time) & (df.index < end_time)]
-    #modefit_con_diam = df.columns[(df.columns > start_diam) & (df.columns < end_diam)]
-    df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)]
-    df_mfit_con = df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]]
-    print("HERE1",len(df_mfit_con.columns))
+    df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)] #filter with time
 
     #if no values fall into the given range pick nearby two values
     if len(df_mfit_con.columns) == 0:
-        df_mfit_con.columns = [df.columns[closest(df.columns,start_diam)],df.columns[closest(df.columns,end_diam)]]??
-        
+        df_mfit_con.columns = [df.columns[closest(df.columns,start_diam)],df.columns[closest(df.columns,end_diam)]]
+    
     
     print("HERE2",df_mfit_con)
+    #df_mfit_con = df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]]
+    #print("HERE1",len(df_mfit_con.columns))
 
+    
+        #df_mfit_con.columns.append(df.columns[closest(df.columns,start_diam)])
+        #df_mfit_con.columns.append(df.columns[closest(df.columns,end_diam)])
+    
+    #print("HERE2",df_mfit_con)
 max_con_modefit()
-        
+"""   
+
 def plot(dataframe):
     #plot line when day changes
     new_day = None
@@ -364,7 +356,7 @@ def plot(dataframe):
     plt.xlim(dataframe.index[2],dataframe.index[-3])
     plt.show()
 
-#plot(df)
+plot(df)
 
 
 
