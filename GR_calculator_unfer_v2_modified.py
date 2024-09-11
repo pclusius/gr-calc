@@ -19,11 +19,12 @@ import os ###
 from os import listdir ###
 
 ###################################################################
-folder = "./dmps Nesrine/" ###folder with the data files
-#dados1= pd.read_csv(path1,sep='\s+',engine='python') ###steps to '\s+'
-#df1 = pd.DataFrame(dados1)
-#dm160405.sum
+paths = "./dmps Nesrine/dm160612.sum" ###path to data file
+dados1= pd.read_csv(paths,sep='\s+',engine='python') ###steps to '\s+'
+df1 = pd.DataFrame(dados1)
+#dm160612.sum
 
+"""
 ###ADDED
 #user gives the amount of data files to plot and starting day
 #assumes data files are in chronological order in the folder with consecutive days
@@ -66,8 +67,8 @@ def combine_data():
     combined_data = pd.concat(dfs,axis=0,ignore_index=True)
     return combined_data
 df1 = combine_data()
+"""
 ###----
-
 
 diameters = df1.columns[2:].astype(float)*10**9 ### save diameters as floats before replacing them with new column names / units from m to nm
 df1.columns = ["time (d)", "total number concentration (N)"] + [f"dN/dlogDp_{i}" for i in range(1,df1.shape[1]-1)] ###rename columns
@@ -76,7 +77,7 @@ time_d = df1.iloc[:,0].astype(float) ###ADDED save time as days before changing 
 ### assuming time is in "days from start of measurement"
 def days_into_UTC():
     time_steps = df1["time (d)"] - time_d[0]
-    start_date_measurement = f"20{paths[0][2:4]}-{paths[0][4:6]}-{paths[0][6:8]} 00:00:00"
+    start_date_measurement = f"20{paths[-10:-8]}-{paths[-8:-6]}-{paths[-6:-4]} 00:00:00"
     start_date = datetime.strptime(start_date_measurement, "%Y-%m-%d %H:%M:%S")
     df1["time (d)"] = [start_date + timedelta(days=i) for i in time_steps] #converting timesteps to datetime
 days_into_UTC() ###
@@ -687,7 +688,7 @@ def plot2(df):
                   
         slope = round((popt[0] * 12), 1)
         x_values = np.arange(len(data))
-        plt.plot(data.index, curve(x_values, *popt), lw=3)
+        plt.plot(data.index, curve(x_values, *popt), lw=3) 
    
         midpoint_idx = len(data) // 2
         midpoint_time = data.index[midpoint_idx]
@@ -699,8 +700,8 @@ def plot2(df):
     #plt.show() ###
     return curve ###added to save curvefit values 
     
-#plot2(df_GR_final) ###
-modefit_points = plot2(df_GR_final) ###added to save curvefit values 
+plot2(df_GR_final) ###
+#modefit_points = plot2(df_GR_final) ###added to save curvefit values 
 df_GR_final.to_csv('./Gr_final.csv', sep=',', header=True, index=True, na_rep='nan')
 
 

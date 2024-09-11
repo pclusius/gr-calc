@@ -46,37 +46,38 @@ fig, ax = plt.subplots(3,figsize=(14, 15), dpi=90)
 
 #9.0794158
 #7.5459950000000005
+#30.834151000000002
 
 x1 = df1.iloc[:,0]
-y1 = df1["7.5459950000000005"]
+y1 = df1["30.834151000000002"]
 ax[1].plot(x1,y1,linestyle='dotted', color="black")
 
 x2 = df2.iloc[:,0]
-y2 = df2["7.5459950000000005"]
+y2 = df2["30.834151000000002"]
 ax[1].plot(x2,y2,linestyle='-')
 
 x3 = df3.iloc[:,0]
-y3 = df3["7.5459950000000005"]
+y3 = df3["30.834151000000002"]
 ax[1].plot(x3,y3,linestyle='--')
 
 x4 = df4.iloc[:,0]
-y4 = df4["7.5459950000000005"]
+y4 = df4["30.834151000000002"]
 ax[2].plot(x4,y4,linestyle='dotted', color="black")
 
 x5 = df5.iloc[:,0]
-y5 = df5["7.5459950000000005"]
+y5 = df5["30.834151000000002"]
 ax[2].plot(x5,y5,linestyle='-')
 
 x6 = df6.iloc[:,0]
-y6 = df6["7.5459950000000005"]
+y6 = df6["30.834151000000002"]
 ax[2].plot(x6,y6,linestyle='--')
 
 x7 = df7.iloc[:,0]
-y7 = df7["7.5459950000000005"]
+y7 = df7["30.834151000000002"]
 ax[0].plot(x7,y7,linestyle='-')
 
 x8 = df8.iloc[:,0]
-y8 = df8["7.5459950000000005"]
+y8 = df8["30.834151000000002"]
 ax[0].plot(x8,y8,linestyle='--')
 
 ax[1].axhline(y=0.03, color='red', linestyle='-', linewidth=1)
@@ -92,6 +93,6 @@ ax[0].legend(["no filter","filtered"])
 ax[1].legend(["deriv(filter)","deriv(no filter)","filter(deriv(no filter))","threshold=0.03"])
 ax[2].legend(["deriv(filter)","deriv(no filter)","filter(deriv(no filter))","threshold=0.000009"])
 
-ax[0].set_title("Dp = 7.5459950000000005nm, median filter 5")
+ax[0].set_title("Dp = 30.834151000000002nm, median filter 5")
 #plt.tight_layout()
 plt.show()
