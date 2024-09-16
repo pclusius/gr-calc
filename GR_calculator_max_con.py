@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 ################ DATA FORMATTING ################
 #folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
 #dm160612.sum
-#dm160401.sum
+#output_modefit_2016_06_5median_6nm_fix_xmin.csv
 
 file_names = file_names #copy paths from the file "GR_calculator_unfer_v2_modified"
 #df = pd.DataFrame(pd.read_csv(paths,sep='\s+',engine='python'))
@@ -207,7 +207,7 @@ def find_modes_1st_deriv(dataframe,df_deriv,threshold_deriv,threshold_diff): #fi
     return df_mode_ranges, start_time_list, start_diam_list, end_time_list, end_diam_list
 
 #with this we can check the format
-find_modes_1st_deriv(df,df_1st_derivatives,threshold_deriv=0.03,threshold_diff=2000)[0].to_csv('./modes.csv', sep=',', header=True, index=True, na_rep='nan')
+#find_modes_1st_deriv(df,df_1st_derivatives,threshold_deriv=0.03,threshold_diff=2000)[0].to_csv('./modes.csv', sep=',', header=True, index=True, na_rep='nan')
 
 """
 def find_modes_2nd_deriv(dataframe):
@@ -273,27 +273,32 @@ def find_modes_globalthreshold(dataframe, factor): #factor between 0-1, scales t
                 continue
     return df_mode_ranges
 """
-    
-def gaus(x,a,x0,sigma): #defining gaussian curve, from Janne's code
+
+def closest(list, number): #find closes element to a given value in list, returns index
+    value = []
+    for i in list:
+        value.append(abs(number-i))
+    return value.index(min(value))
+
+#functions 
+def gaus(x,a,x0,sigma): #from Janne's code
         return a*np.exp(-(x-x0)**2/(2*sigma**2))
+def logi(x,L,x0,k): #from Janne's code
+        return L * (1 + np.exp(-k*(x-x0)))**(-1) 
+
 def max_con(): #returns [times, diameters]
-    df_modes = find_modes_1st_deriv(df,df_1st_derivatives,threshold_deriv=0.03,threshold_diff=10000)[0]
-    
-    #start_times = find_modes_1st_deriv(df)[1]
-    #start_diams = find_modes_1st_deriv(df)[2]
-    #end_times = find_modes_1st_deriv(df)[3]
-    #end_diams = find_modes_1st_deriv(df)[4]
+    df_modes, start_times, start_diams, end_times, end_diams = find_modes_1st_deriv(df,df_1st_derivatives,threshold_deriv=0.03,threshold_diff=10000)
 
     #gaussian fit to every mode
     max_conc_time = []
     max_conc_diameter = []
 
-    for m in range(len(df_modes.columns)):
+    for i in range(len(df_modes.columns)):
         x = [] #time
         y = [] #concentration
-        for n in range(len(df_modes.index)):
-            concentration = df_modes.iloc[n,m] #find concentration values from the dataframe (y)
-            time = time_d[n] - np.min(time_d)
+        for j in range(len(df_modes.index)):
+            concentration = df_modes.iloc[j,i] #find concentration values from the dataframe (y)
+            time = time_d[j] - np.min(time_d)
 
             if np.isnan(concentration) and len(y) != 0: #gaussian fit when all values of one mode have been added to the y list
                 mu=np.mean(x) #parameters
@@ -306,12 +311,12 @@ def max_con(): #returns [times, diameters]
                         print("Peak outside range. Skipping.")
                     else:
                         max_conc_time = np.append(max_conc_time,params[1] + np.min(time_d)) #make a list of times with the max concentration time in each diameter
-                        max_conc_diameter = np.append(max_conc_diameter,float(df_modes.columns[m])) #make list of diameters with max concentrations
+                        max_conc_diameter = np.append(max_conc_diameter,float(df_modes.columns[i])) #make list of diameters with max concentrations
 
 
                         #plot start and end time
-                        #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
-                        #plt.plot(end_times[n], end_diams[m], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
+                        #plt.plot(start_times[j], start_diams[i], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
+                        #plt.plot(end_times[j], end_diams[i], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
                         
                 except:
                     print("Diverges. Skipping.")
@@ -329,84 +334,176 @@ def max_con(): #returns [times, diameters]
     
     return max_conc_time, max_conc_diameter
 
-def closest(list, number): #find closes element to a given value in list, returns index
-    value = []
-    for i in list:
-        value.append(abs(number-i))
-    return value.index(min(value))
+def find_ranges():
+    df_GR_values = pd.DataFrame(pd.read_csv("./Gr_final.csv",sep=',',engine='python')) #open calculated values in Gabi's code
+    threshold = 5 #GR [nm/h]
 
+    df_ranges = []
+
+    for i in df_GR_values.index: #go through every fitted growth rate
+        growth_rate = df_GR_values.loc[i,"GR"]
+        if abs(growth_rate) >= threshold: #find maximum concentration if growth rate is higher than threshold value
+            row = df_GR_values.loc[i,:]
+            
+            #start and end times/diameters of fitted lines
+            start_time = row["start"] 
+            end_time = row["end"]
+            start_diam = row["d_initial"]
+            end_diam = row["d_final"]
+
+            #make the ranges bigger with given parameters
+            start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S") - timedelta(hours=5) #5 hours
+            end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S") + timedelta(hours=5)
+            
+            if growth_rate < 0: #if growth rate is negative
+                start_diam = start_diam * 1.5 #factor of 1.5
+                end_diam = end_diam / 1.5
+            else:
+                start_diam = start_diam / 1.5
+                end_diam = end_diam * 1.5
+
+            #make a df with wanted range and add them to the list
+            df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)]
+            df_ranges.append(df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]])
+
+    return df_ranges
 
 def maxcon_modefit(): #in ranges where mode fitting has succeeded, use these points to calculate the maximum concentration
-    df_GR_values = pd.DataFrame(pd.read_csv("./Gr_final.csv",sep=',',engine='python')) #open calculated values in Gabi's code
-    my_GR = df_GR_values.iloc[12,:]  #choose interesting growth rate, now defined in row 14 (14-2=12)
-
-    #start and end times/diameters of fitted lines
-    start_time = my_GR["start"] 
-    end_time = my_GR["end"]
-    start_diam = my_GR["d_initial"]
-    end_diam = my_GR["d_final"]
-
-    #make the ranges bigger with given parameters
-    start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S") - timedelta(hours=5) #5 hours
-    end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S") + timedelta(hours=5)
-    start_diam = start_diam / 1.5 #factor of 1.5
-    end_diam = end_diam * 1.5
-
-    #make a df with wanted range
-    df_mfit_con = df[(df.index >= start_time) & (df.index <= end_time)]
-    df_range = df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]]
-
-    time_range = df.index.intersection(df_range.index) #find matching indices
-    indices = [df.index.get_loc(row) for row in time_range]
-    time_d_range = time_d[indices] #define time in days again depending on chosen range
-    
-    df_range_deriv = cal_1st_derivative(df_range,time_days=time_d_range) #calculate derivative
-    df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.02,threshold_diff=2000)[0] #find modes
-
-    #gaussian fit to every mode
+    #create lists for results
     max_conc_time = []
     max_conc_diameter = []
+    df_ranges = find_ranges()
 
-    for m in range(len(df_modes.columns)):
-        x = [] #time
-        y = [] #concentration
-        for n in range(len(df_modes.index)):
-            concentration = df_modes.iloc[n,m] #find concentration values from the dataframe (y)
-            time = time_d_range[n] - np.min(time_d_range)
+    for df_range in df_ranges: #go through every range around GRs
 
-            if np.isnan(concentration) and len(y) != 0: #gaussian fit when all values of one mode have been added to the y list
-                mu=np.mean(x) #parameters
-                sigma = np.std(x)
-                a = np.max(y)
+        time_range = df.index.intersection(df_range.index) #find matching indices
+        indices = [df.index.get_loc(row) for row in time_range]
+        time_d_range = time_d[indices] #define time in days again depending on chosen range
+        
+        df_range_deriv = cal_1st_derivative(df_range,time_days=time_d_range) #calculate derivative
+        df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=7000)[0] #find modes
 
-                try: #gaussian fit
-                    params,pcov = curve_fit(gaus,x,y,p0=[a,mu,sigma])
-                    if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
-                        print("Peak outside range. Skipping.")
-                    else:
-                        max_conc_time = np.append(max_conc_time,params[1] + np.min(time_d_range)) #make a list of times with the max concentration time in each diameter
-                        max_conc_diameter = np.append(max_conc_diameter,float(df_modes.columns[m])) #make list of diameters with max concentrations
+        #gaussian fit to every mode
+        for m in range(len(df_modes.columns)):
+            x = [] #time
+            y = [] #concentration
+            for n in range(len(df_modes.index)):
+                concentration = df_modes.iloc[n,m] #find concentration values from the dataframe (y)
+                time = time_d_range[n] - np.min(time_d_range)
+
+                if np.isnan(concentration) and len(y) != 0: #gaussian fit when all values of one mode have been added to the y list
+                    mu=np.mean(x) #parameters
+                    sigma = np.std(x)
+                    a = np.max(y)
+
+                    try: #gaussian fit
+                        params,pcov = curve_fit(gaus,x,y,p0=[a,mu,sigma])
+                        if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
+                            print("Peak outside range. Skipping.")
+                        else:
+                            max_conc_time = np.append(max_conc_time,params[1] + np.min(time_d_range)) #make a list of times with the max concentration time in each diameter
+                            max_conc_diameter = np.append(max_conc_diameter,float(df_modes.columns[m])) #make list of diameters with max concentrations
 
 
-                        #plot start and end time
-                        #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
-                        #plt.plot(end_times[n], end_diams[m], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
-                        
-                except:
-                    print("Diverges. Skipping.")
-                
-                x = [] #reset
-                y = [] 
-            elif not np.isnan(concentration): #separates mode values
-                x = np.append(x,time)
-                y = np.append(y,concentration)
-            elif np.isnan(concentration): #skips nan values
-                x = [] #reset
-                y = [] 
+                            #plot start and end time
+                            #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
+                            #plt.plot(end_times[n], end_diams[m], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
+                            
+                    except:
+                        print("Diverges. Skipping.")
+                    
+                    x = [] #reset
+                    y = [] 
+                elif not np.isnan(concentration): #separates mode values
+                    x = np.append(x,time)
+                    y = np.append(y,concentration)
+                elif np.isnan(concentration): #skips nan values
+                    x = [] #reset
+                    y = [] 
 
     max_conc_time = list_days_into_UTC(max_conc_time) #change days to UTC in the list of max concentration times
     
     return max_conc_time, max_conc_diameter
+
+def appearance_time(self,event): #appearance time (modified from Janne's code)
+    #create lists for results
+    appear_time = []
+    appear_diameter = []
+    
+    df_ranges = find_ranges()
+    max_conc_times, max_conc_diameters = maxcon_modefit() #timestamps and diameters of maximum concentrations in ranges
+
+    for df_range in df_ranges: #go through every range around GRs
+        max_concs = []
+
+        time_range = df.index.intersection(df_range.index) #find matching indices
+        indices = [df.index.get_loc(row) for row in time_range]
+        time_d_range = time_d[indices] #define time in days again depending on chosen range
+        
+        df_range_deriv = cal_1st_derivative(df_range,time_days=time_d_range) #calculate derivative
+        df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=7000)[0] #find modes
+
+        #logistic fit to every mode
+        for dp in range(len(df_modes.columns)):
+            x = [] #time
+            y = [] #concentration
+            for t in range(len(df_modes.index)):
+                concentration = df_modes.iloc[t,dp] - np.min(df_modes.iloc[:,dp]) #find concentration values from the dataframe (y)
+                time = time_d_range[t] - np.min(time_d_range)
+
+                if np.isnan(concentration) and len(y) != 0: #logistic fit when all values of one mode have been added to the y list
+
+                    #gaussian fit first to find maximum concentrations 
+                    mu=np.mean(x) #parameters
+                    sigma = np.std(x)
+                    a = np.max(y)
+
+                    try: #gaussian fit
+                        params,pcov = curve_fit(gaus,x,y,p0=[a,mu,sigma])
+                        if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
+                            print("Peak outside range. Skipping.")
+                        else:
+                            max_concs = np.append(max_concs,params[1] + np.min(time_d_range)) #make a list of times with the max concentration time in each diameter WAHT TO PUT HEREE
+
+
+                            #plot start and end time
+                            #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
+                            #plt.plot(end_times[n], end_diams[m], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
+                            
+                    except:
+                        print("Diverges. Skipping.")
+
+                    
+                    #logistic fit
+                    L = df_modes.loc[max_conc_times,max_conc_diameters] #maximum value (concentration)
+                    x0 = np.nanmean(x) #midpoint x value
+                    k = 1.0 #growth rate
+
+                    try: 
+                        params,pcov = curve_fit(logi,x,y,p0=[L,x0,k])
+                        if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
+                            print("Peak outside range. Skipping.")
+                        else:
+                            appear_time = np.append(appear_time,params[1] + np.min(time_d_range)) #make a list of times with the appearance time in each diameter
+                            appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp])) 
+
+
+                            #plot start and end time
+                            #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
+                            #plt.plot(end_times[n], end_diams[m], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
+                            
+                    except:
+                        print("Diverges. Skipping.")
+                    
+                    x = [] #reset
+                    y = [] 
+                elif not np.isnan(concentration): #separates mode values
+                    x = np.append(x,time)
+                    y = np.append(y,concentration)
+                elif np.isnan(concentration): #skips nan values
+                    x = [] #reset
+                    y = []
+    return appear_time, appear_diameter
 
 def plot(dataframe):
     #plot line when day changes
@@ -417,13 +514,8 @@ def plot(dataframe):
             plt.axvline(x=i, color='black', linestyle='-', linewidth=0.5)
         new_day = day
     
-    #max_con_x = max_con()[0][(maxcon_modefit()[0][0]>max_con()[0]) & (maxcon_modefit()[0][-1]<max_con()[0])] 
-    #max_con_y = max_con()[1][(maxcon_modefit()[1][0]>max_con()[1]) & (maxcon_modefit()[1][-1]<max_con()[1])]
-    #max_con_x = max_con()[0][(df.index >= start_time) & (df.index <= end_time)]
-    #max_con_x[max_con_x.columns[(max_con_x.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]] = np.nan
-    
-    plt.plot(max_con()[0], max_con()[1], '*', alpha=0.5, color='white', ms=5,label='maximum concentration') #without using mode fitting
-    #plt.plot(maxcon_modefit()[0],maxcon_modefit()[1], '*', alpha=0.5, color='white', ms=5) #using mode fitting
+    #plt.plot(max_con()[0], max_con()[1], '*', alpha=0.5, color='white', ms=5,label='maximum concentration') #without using mode fitting
+    plt.plot(maxcon_modefit()[0],maxcon_modefit()[1], '*', alpha=0.5, color='white', ms=5,label='maximum concentration') #using mode fitting 
     
     plt.legend(fontsize=6,fancybox=False,framealpha=0.9)
     for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black

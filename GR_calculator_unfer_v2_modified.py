@@ -55,15 +55,16 @@ def input_data_from_folder():
 def input_data():
     file_names = []
     modefit_names = []
-    more = "y"
-    while more == "y":
+    while True:
         file_name = input("Name of data file (.sum): ")
         modefit_name = input("Name of mode fitting file (.csv): ")
         file_names.append(file_name)
         modefit_names.append(modefit_name)
         more = input("Do you want to add more? (y/n) ")
+        if more == "n":
+            break
     return file_names,modefit_names
-file_names = input_data()[0]
+file_names, modefit_names = input_data()
 
 ###modified from Janne's code "NpfEventAnalyzer.py":
 ### load data for n days: ###
@@ -72,7 +73,12 @@ def combine_data(files,separation):
     test = True
     #load all given data files and save them a list
     for i in files:
-        df = pd.DataFrame(pd.read_csv(folder + i,sep=separation,engine='python'))
+        #choose the right path
+        if separation == '\s+':
+            df = pd.DataFrame(pd.read_csv(folder + i,sep=separation,engine='python'))
+        elif separation == ',':
+            df = pd.DataFrame(pd.read_csv(i,sep=separation,engine='python'))
+
         #make sure all columns have the same diameter values, name all other columns with the labels of the first one
         if test == True:
             diameter_labels = df.columns
@@ -132,8 +138,7 @@ df1.to_csv('./combined_data.csv', sep=',', header=True, index=True, na_rep='nan'
 #path4=r"./output_modefit_2016_04.csv" ###CHANGE path
 #dados4= pd.read_csv(path4,sep=',')
 #df4 = pd.DataFrame(dados4)
-modefit_names = input_data()[1]
-df4 = combine_data(modefit_names,separation=',')
+df4 = combine_data(modefit_names,separation=',') ###
 
 df4.index = pd.to_datetime(df4['Timestamp (UTC)'])
 df4 = df4.drop(['Timestamp (UTC)'],axis=1)
@@ -176,6 +181,7 @@ def replace_zero_with_nan(row):
 
 df4 = df4.apply(replace_zero_with_nan, axis=1)
 df_modes = df4.copy()
+df_modes.to_csv('./df_modes.csv', sep=',', header=True, index=True, na_rep='nan')
 
 ########################################################################
 ###### CMAP
