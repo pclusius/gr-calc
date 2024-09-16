@@ -14,7 +14,7 @@ from joblib import Parallel, delayed
 
 ######################################################################################################
 class Main():
-    def __init__(self, dataframe, year, month):
+    def __init__(self, dataframe, year, month, day): ###ADDED day
         self.v = False
         print("init Main")
     
@@ -59,7 +59,7 @@ class Main():
         ###############################
         
         print(df)
-        df.to_csv('./output_modefit_'+str(year)+'_'+str(month)+'.csv', sep=',', header=True, index=True, na_rep='nan')
+        df.to_csv('./output_modefit_'+str(year)+'_'+str(month)+'_'+str(day)+'.csv', sep=',', header=True, index=True, na_rep='nan') ###ADDED day
  
         print('')
         print('********* FINISHED *********')

@@ -19,16 +19,18 @@ import os ###
 from os import listdir ###
 
 ###################################################################
-paths = "./dmps Nesrine/dm160612.sum" ###path to data file
-dados1= pd.read_csv(paths,sep='\s+',engine='python') ###steps to '\s+'
-df1 = pd.DataFrame(dados1)
+#paths = "./dmps Nesrine/dm160401.sum" ###path to data file
+folder = "./dmps Nesrine/" #folder with data files
+#dados1= pd.read_csv(paths,sep='\s+',engine='python') ###steps to '\s+'
+#df1 = pd.DataFrame(dados1)
 #dm160612.sum
 
-"""
+
 ###ADDED
 #user gives the amount of data files to plot and starting day
 #assumes data files are in chronological order in the folder with consecutive days
-def input_data():
+"""
+def input_data_from_folder():
     paths_list = []
     
     amount = input("How many days of data (number): ")
@@ -47,16 +49,30 @@ def input_data():
         else:
             continue
     return paths_list
-paths = input_data()
+#paths = input_data()
+"""
+
+def input_data():
+    file_names = []
+    modefit_names = []
+    more = "y"
+    while more == "y":
+        file_name = input("Name of data file (.sum): ")
+        modefit_name = input("Name of mode fitting file (.csv): ")
+        file_names.append(file_name)
+        modefit_names.append(modefit_name)
+        more = input("Do you want to add more? (y/n) ")
+    return file_names,modefit_names
+file_names = input_data()[0]
 
 ###modified from Janne's code "NpfEventAnalyzer.py":
 ### load data for n days: ###
-def combine_data():
+def combine_data(files,separation):
     dfs = []
     test = True
     #load all given data files and save them a list
-    for i in paths:
-        df = pd.DataFrame(pd.read_csv(folder + i,sep='\s+',engine='python'))
+    for i in files:
+        df = pd.DataFrame(pd.read_csv(folder + i,sep=separation,engine='python'))
         #make sure all columns have the same diameter values, name all other columns with the labels of the first one
         if test == True:
             diameter_labels = df.columns
@@ -66,8 +82,8 @@ def combine_data():
     #combine datasets
     combined_data = pd.concat(dfs,axis=0,ignore_index=True)
     return combined_data
-df1 = combine_data()
-"""
+df1 = combine_data(file_names,separation='\s+')
+
 ###----
 
 diameters = df1.columns[2:].astype(float)*10**9 ### save diameters as floats before replacing them with new column names / units from m to nm
@@ -77,7 +93,7 @@ time_d = df1.iloc[:,0].astype(float) ###ADDED save time as days before changing 
 ### assuming time is in "days from start of measurement"
 def days_into_UTC():
     time_steps = df1["time (d)"] - time_d[0]
-    start_date_measurement = f"20{paths[-10:-8]}-{paths[-8:-6]}-{paths[-6:-4]} 00:00:00"
+    start_date_measurement = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00"
     start_date = datetime.strptime(start_date_measurement, "%Y-%m-%d %H:%M:%S")
     df1["time (d)"] = [start_date + timedelta(days=i) for i in time_steps] #converting timesteps to datetime
 days_into_UTC() ###
@@ -113,9 +129,11 @@ df1.to_csv('./combined_data.csv', sep=',', header=True, index=True, na_rep='nan'
 
 ##############################################################
 
-path4=r"/Users/SummerWork24/GR_calculator_unifer/output_modefit_2016_06_5median_6nm_fix_xmin.csv" ###CHANGE path
-dados4= pd.read_csv(path4,sep=',')
-df4 = pd.DataFrame(dados4)
+#path4=r"./output_modefit_2016_04.csv" ###CHANGE path
+#dados4= pd.read_csv(path4,sep=',')
+#df4 = pd.DataFrame(dados4)
+modefit_names = input_data()[1]
+df4 = combine_data(modefit_names,separation=',')
 
 df4.index = pd.to_datetime(df4['Timestamp (UTC)'])
 df4 = df4.drop(['Timestamp (UTC)'],axis=1)
@@ -635,7 +653,7 @@ def plot2(df):
     #print("df_modes 2:",df_modes) ###
     
     
-    plt.plot(df_modes.index, df_modes['m1_d'], '*', alpha=0.5, color='black', markersize=5)
+    plt.plot(df_modes.index, df_modes['m1_d'], '*', alpha=0.5, color='black', markersize=5, label='mode fitting') ###ADDED label='mode fitting'
     plt.plot(df_modes.index, df_modes['m2_d'], '*', alpha=0.5, color='black', markersize=5)
     plt.plot(df_modes.index, df_modes['m3_d'], '*', alpha=0.5, color='black', markersize=5)
     plt.plot(df_modes.index, df_modes['m4_d'], '*', alpha=0.5, color='black', markersize=5)
@@ -695,13 +713,14 @@ def plot2(df):
         midpoint_value = curve(midpoint_idx, *popt)
         
         plt.annotate(f'{slope} nm/h', (midpoint_time, midpoint_value), 
-                     textcoords="offset points", xytext=(0, 7), ha='center', fontsize=5, fontweight='bold') ### xytext=(0, 10) -> xytext=(0, 7) & fontsize=8 -> fontsize=5               
+                     textcoords="offset points", xytext=(0, 7), ha='center', fontsize=5, fontweight='bold') ### xytext=(0, 10) -> xytext=(0, 7) & fontsize=8 -> fontsize=5   
       
     #plt.show() ###
-    return curve ###added to save curvefit values 
+    return ax ###added to use ax in my code
     
-plot2(df_GR_final) ###
+ax = plot2(df_GR_final) ###
 #modefit_points = plot2(df_GR_final) ###added to save curvefit values 
 df_GR_final.to_csv('./Gr_final.csv', sep=',', header=True, index=True, na_rep='nan')
+
 
 

@@ -13,17 +13,18 @@ import matplotlib.pyplot as plt
 ################ DATA FORMATTING ################
 #folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
 #dm160612.sum
+#dm160401.sum
 
-paths = paths #copy paths from the file "GR_calculator_unfer_v2_modified"
-df = pd.DataFrame(pd.read_csv(paths,sep='\s+',engine='python'))
+file_names = file_names #copy paths from the file "GR_calculator_unfer_v2_modified"
+#df = pd.DataFrame(pd.read_csv(paths,sep='\s+',engine='python'))
 
-"""
+
 #load data for as many days as given
 def combine_data():
     dfs = []
     test = True
     #load all given data files and save them a list
-    for i in paths:
+    for i in file_names:
         df = pd.DataFrame(pd.read_csv(folder + i,sep='\s+',engine='python'))
         #make sure all columns have the same diameter values, name all other columns with the labels of the first one
         if test == True:
@@ -35,7 +36,7 @@ def combine_data():
     combined_data = pd.concat(dfs,axis=0,ignore_index=True)
     return combined_data
 df = combine_data() #defining dataframe with combined data
-"""
+
 
 def median_filter(dataframe,window): #filter data                     
     for i in dataframe.columns:
@@ -51,12 +52,12 @@ time_d = df['time (d)'].values.astype(float) #save time as days before changing 
 #change days into UTC (assuming time is in "days from start of measurement") for a dataframe
 def df_days_into_UTC(dataframe):
     time_steps = dataframe["time (d)"] - time_d[0]
-    start_date_measurement = f"20{paths[-10:-8]}-{paths[-8:-6]}-{paths[-6:-4]} 00:00:00"
+    start_date_measurement = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00"
     start_date = datetime.strptime(start_date_measurement, "%Y-%m-%d %H:%M:%S")
     dataframe["time (d)"] = [start_date + timedelta(days=i) for i in time_steps] #converting timesteps to datetime
 def list_days_into_UTC(list): #same for a list
     time_steps = list - time_d[0]
-    start_date_measurement = f"20{paths[-10:-8]}-{paths[-8:-6]}-{paths[-6:-4]} 00:00:00"
+    start_date_measurement = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00"
     start_date = datetime.strptime(start_date_measurement, "%Y-%m-%d %H:%M:%S")
     list = [start_date + timedelta(days=i) for i in time_steps] #converting timesteps to datetime
     return list
@@ -174,10 +175,10 @@ def find_modes_1st_deriv(dataframe,df_deriv,threshold_deriv,threshold_diff): #fi
 
                 
                 #save start and end times with their diameters in lists
-                start_time_list.append(start_time)
-                start_diam_list.append(k)
-                end_time_list.append(end_time)
-                end_diam_list.append(k)
+                #start_time_list.append(start_time)
+                #start_diam_list.append(k)
+                #end_time_list.append(end_time)
+                #end_diam_list.append(k)
                 
                 #restart initial values
                 start_time = None 
@@ -200,8 +201,8 @@ def find_modes_1st_deriv(dataframe,df_deriv,threshold_deriv,threshold_diff): #fi
                 continue
     
     #plot start and end points
-    plt.plot(start_time_list, start_diam_list, '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
-    plt.plot(end_time_list, end_diam_list, '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
+    #plt.plot(start_time_list, start_diam_list, '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
+    #plt.plot(end_time_list, end_diam_list, '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
     
     return df_mode_ranges, start_time_list, start_diam_list, end_time_list, end_diam_list
 
@@ -276,8 +277,8 @@ def find_modes_globalthreshold(dataframe, factor): #factor between 0-1, scales t
 def gaus(x,a,x0,sigma): #defining gaussian curve, from Janne's code
         return a*np.exp(-(x-x0)**2/(2*sigma**2))
 def max_con(): #returns [times, diameters]
-    df_modes = find_modes_1st_deriv(df,df_1st_derivatives,threshold_deriv=0.03,threshold_diff=2000)[0]
-    print("df_modes",df_modes)
+    df_modes = find_modes_1st_deriv(df,df_1st_derivatives,threshold_deriv=0.03,threshold_diff=10000)[0]
+    
     #start_times = find_modes_1st_deriv(df)[1]
     #start_diams = find_modes_1st_deriv(df)[2]
     #end_times = find_modes_1st_deriv(df)[3]
@@ -360,7 +361,7 @@ def maxcon_modefit(): #in ranges where mode fitting has succeeded, use these poi
     time_d_range = time_d[indices] #define time in days again depending on chosen range
     
     df_range_deriv = cal_1st_derivative(df_range,time_days=time_d_range) #calculate derivative
-    df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=2000)[0] #find modes
+    df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.02,threshold_diff=2000)[0] #find modes
 
     #gaussian fit to every mode
     max_conc_time = []
@@ -418,13 +419,18 @@ def plot(dataframe):
     
     #max_con_x = max_con()[0][(maxcon_modefit()[0][0]>max_con()[0]) & (maxcon_modefit()[0][-1]<max_con()[0])] 
     #max_con_y = max_con()[1][(maxcon_modefit()[1][0]>max_con()[1]) & (maxcon_modefit()[1][-1]<max_con()[1])]
-
     #max_con_x = max_con()[0][(df.index >= start_time) & (df.index <= end_time)]
     #max_con_x[max_con_x.columns[(max_con_x.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]] = np.nan
-    plt.plot(max_con()[0], max_con()[1], '*', alpha=0.5, color='green', ms=5) #without using mode fitting
-
-    plt.plot(maxcon_modefit()[0],maxcon_modefit()[1], '.', alpha=0.5, color='white', ms=5) #using mode fitting
     
+    plt.plot(max_con()[0], max_con()[1], '*', alpha=0.5, color='white', ms=5,label='maximum concentration') #without using mode fitting
+    #plt.plot(maxcon_modefit()[0],maxcon_modefit()[1], '*', alpha=0.5, color='white', ms=5) #using mode fitting
+    
+    plt.legend(fontsize=6,fancybox=False,framealpha=0.9)
+    for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
+        legend_handle.set_markeredgewidth(0.5)
+        legend_handle.set_markeredgecolor("black")
+                    
+    #plt.legend(fontsize=6,fancybox=False,facecolor="blue",framealpha=0.6)
     plt.yscale('log')
     plt.xlim(dataframe.index[2],dataframe.index[-3])
     plt.show()

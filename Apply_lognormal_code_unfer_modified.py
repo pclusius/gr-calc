@@ -11,7 +11,7 @@ from datetime import datetime, timedelta ###CHANGE added timedelta
 from lognormal_fit_multiprocessing_unfer_modified import Main as logf ###CHANGE lognormal_fit_multiprocessing_unfer -> lognormal_fit_multiprocessing_unfer_modified
 from multiprocessing import Process
 
-path1 = r"./dmps Nesrine/dm160612.sum"                   ###CHANGE ./CerroMirador_SMPS_INV&CORR_Apr19toMar23.csv -> file name changed  #put here the data file name
+path1 = r"./dmps Nesrine/dm160402.sum"                   ###CHANGE ./CerroMirador_SMPS_INV&CORR_Apr19toMar23.csv -> file name changed  #put here the data file name
 dados1 = pd.read_csv(path1, sep='\s+',engine='python')      ###CHANGE separate with "\s+" instead of ";"
 df1 = pd.DataFrame(dados1)
 diameters_str = list(df1.columns[2:]) ### save diameters before replacing them with new column names
@@ -61,6 +61,8 @@ for i in df1.columns:
     df1[i] = df1[i].rolling(window=5, center=True).median() ### window of 5 datapoints i.e. 2 neighbouring value
 df1.dropna(inplace=True)
 
+
+"""
 ### grouping in case of data over several months..
 month_year_groups = df1.groupby([df1.index.year, df1.index.month])
 month_year_dataframes = [group for _, group in month_year_groups]
@@ -75,8 +77,22 @@ def lognormal():
     for z, dataframe in enumerate(month_year_dataframes):
         year, month = month_year_labels[z]
         main_instance = logf(dataframe, year, month)
+"""
 
-if __name__ == "__main__":    ###multiprocessing works differently on WIN/MAC, not needed on LINUX
+#ADDED DAY AS WELL
+year_month_day_groups = df1.groupby([df1.index.year, df1.index.month, df1.index.day])
+year_month_day_dataframes = [group for _, group in year_month_day_groups]
+
+year_month_day_labels = [(group_name[0], f"{group_name[1]:02d}", f"{group_name[2]:02d}") for group_name, _ in year_month_day_groups]
+
+#####################################################################
+
+def lognormal(): 
+    for z, dataframe in enumerate(year_month_day_dataframes):
+        year, month, day = year_month_day_labels[z]
+        main_instance = logf(dataframe, year, month, day)
+
+if __name__ == "__main__":    ###multiprocessing works differently on WIN/MAC, not needed on LINUX?
     process = Process(target=lognormal)
     process.start()
     process.join()
