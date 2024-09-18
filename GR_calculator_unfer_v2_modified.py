@@ -647,7 +647,7 @@ print(df_GR_final)
 ###############################################################################
 
 def plot2(df):
-    fig, ax = plt.subplots(figsize=(12, 5), dpi=200) ### figsize=(12, 3), dpi=300 -> figsize=(12, 5), dpi=200
+    fig, ax = plt.subplots(figsize=(14, 5), dpi=200) ### figsize=(12, 3), dpi=300 -> figsize=(12, 5), dpi=200
 
     x = df1.index[0:]
     y = df1.columns.astype(float)
