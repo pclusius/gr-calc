@@ -16,7 +16,7 @@ This code assumes dmps data.
 '''
 
 ################ DATA FORMATTING ################
-#folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
+folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
 #dm160612.sum
 #dm160401.sum
 #dm160402.sum
@@ -94,8 +94,8 @@ df = df.drop(['Timestamp (UTC)'], axis=1)
 df.columns = pd.to_numeric(df.columns) * 10**9 #change units from m to nm
 
 #with this we can check the format
-df.to_csv('./data_format_filter.csv', sep=',', header=True, index=True, na_rep='nan')
-#df.to_csv('./data_format_nofilter.csv', sep=',', header=True, index=True, na_rep='nan')
+#df.to_csv('./data_format_filter.csv', sep=',', header=True, index=True, na_rep='nan')
+df.to_csv('./data_format_nofilter.csv', sep=',', header=True, index=True, na_rep='nan')
 
 #NO RESAMPLING UNLIKE IN GABIS CODE
 ####################################################
@@ -139,14 +139,12 @@ def cal_1st_derivative(dataframe,time_range):
         dNdt = np.diff(N)/np.diff(time) #derivative
         df_derivatives.loc[:, i] = dNdt #add calculated derivatives to dataframe
     return  median_filter(df_derivatives,window=5) #filter after derivating
-
-df_1st_derivatives = cal_1st_derivative(df,time_range=time_d)
-
+#df_1st_derivatives = cal_1st_derivative(df,time_range=time_d)
 
 #with this we can check the format
 #cal_1st_derivative(df).to_csv('./1st_derivatives_nofilter.csv', sep=',', header=True, index=True, na_rep='nan')
 #cal_1st_derivative(df).to_csv('./1st_derivatives_filterbefore.csv', sep=',', header=True, index=True, na_rep='nan')
-cal_1st_derivative(df,time_days=time_d).to_csv('./1st_derivatives_filterafter.csv', sep=',', header=True, index=True, na_rep='nan')
+cal_1st_derivative(df,time_range=time_d).to_csv('./1st_derivatives_filterafter.csv', sep=',', header=True, index=True, na_rep='nan')
 #cal_1st_derivative(df).to_csv('./1st_derivatives_logconc_nofilter.csv', sep=',', header=True, index=True, na_rep='nan') 
 #cal_1st_derivative(df).to_csv('./1st_derivatives_logconc_filterbefore.csv', sep=',', header=True, index=True, na_rep='nan')
 #cal_1st_derivative(df).to_csv('./1st_derivatives_logconc_filterafter.csv', sep=',', header=True, index=True, na_rep='nan')
@@ -170,7 +168,7 @@ def cal_min_max(df_1st_deriv,df_2nd_deriv): #returns [df_max, df_min]
     df_max = df[(df_1stderiv_zeros == 0) & (df_2nd_deriv < 0)] #stationary points exist, 2nd derivative is negative
     df_min = df[(df_1stderiv_zeros == 0) & (df_2nd_deriv > 0)] #stationary points exist, 2nd derivative is positive
     return [df_max,df_min]
-df_max = cal_min_max(df_1st_derivatives,df_2nd_derivatives)[0]
+#df_max = cal_min_max(df_1st_derivatives,df_2nd_derivatives)[0]
 
 #finding modes with derivative threshold
 def find_modes_1st_deriv(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes, derivative threshold
@@ -622,7 +620,116 @@ def appearance_time_ranges(): #appearance time (modified from Janne's code)
 
 #################### PLOTTING ######################
 
-def plot(dataframe):
+def plot_channel(dataframe,diameter_list):
+    '''
+    Plots chosen diameter channels over UTC time, with thresholds and gaussian fit.
+    ax[0,0] = whole channel over time, with ranges      ax[0,1] = derivative of concentrations
+    ax[n,0] = n amount of channels                      ax[n,1] = derivative of concentrations
+                                                ...
+    Inputs dataframe with data and diameters (numerical).
+    '''   
+    #calculate derivatives of data in ranges
+    df_ranges = find_ranges()
+    df_ranges_deriv = []
+    for df_range in df_ranges:
+        time_range = dataframe.index.intersection(df_range.index) #find matching indices
+        indices = [dataframe.index.get_loc(row) for row in time_range]
+        time_d_range = time_d[indices] #define time in days again depending on chosen range
+
+        df_range_deriv = cal_1st_derivative(df_range,time_range=time_d_range) #calculate derivative
+        df_ranges_deriv.append(df_range_deriv)
+        #df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=5000)[0] #find modes
+
+    
+    ##plotting##
+    fig, ax1 = plt.subplots(len(diameter_list),2,figsize=(14, 15), dpi=90)
+
+    #concentration
+    #WHOLE CHANNEL
+    x = dataframe.index #time
+    y_list = [] #concentrations
+    for diam in diameter_list:
+        y = dataframe[diam]
+        y_list.append(y)
+
+    row_num = 0 #keeps track of which row of figure we are plotting in
+    for y in y_list:
+        ax1[row_num,0].set_title(f'diameter: ≈{diameter_list[row_num]:.2f} nm', loc='left', fontsize=10) #diameter titles
+
+        #left axis
+        color1 = "blue"
+        ax1[row_num,0].set_ylabel("dN/dlogDp", color=color1)
+        ax1[row_num,0].plot(x, y, color=color1)
+        ax1[row_num,0].tick_params(axis='y', labelcolor=color1)
+
+        #right axis
+        ax2 = ax1[row_num,0].twinx()
+        color2 = "green"
+        ax2.set_ylabel("log10(dN/dlogDp)", color=color2) 
+        ax2.plot(x, y, color=color2)
+        ax2.tick_params(axis='y', labelcolor=color2)
+        ax2.set_yscale('log')
+
+        ax1[row_num,0].set_xlim(dataframe.index[0],dataframe.index[-1])
+
+        row_num += 1
+    
+    #RANGES
+        
+    #derivative
+    #WHOLE CHANNEL
+    df_1st_derivatives = cal_1st_derivative(df,time_range=time_d)
+
+    x = df_1st_derivatives.index #time
+    y_list = [] #concentrations
+    for diam in diameter_list:
+        y = df_1st_derivatives[diam]
+        y_list.append(y)
+
+    row_num = 0 #keeps track of which row of figure we are plotting in
+    for y in y_list:
+        #left axis
+        color1 = "blue"
+        ax1[row_num,1].set_ylabel("d(dN/dlogDp)dt", color=color1)
+        ax1[row_num,1].plot(x, y, color=color1)
+        ax1[row_num,1].tick_params(axis='y', labelcolor=color1)
+
+        #right axis
+        ax2 = ax1[row_num,1].twinx()
+        color2 = "green"
+        ax2.set_ylabel("log10(d(dN/dlogDp)dt)", color=color2) 
+        ax2.plot(x, y, color=color2)
+        ax2.tick_params(axis='y', labelcolor=color2)
+        ax2.set_yscale('log')
+
+        ax1[row_num,1].axhline(y=0.03, color='blue', linestyle='--', linewidth=1,label="threshold = 0.03")
+        ax1[row_num,1].axhline(y=-0.03, color='blue', linestyle='--', linewidth=1)
+        ax2.axhline(y=0.03, color='green', linestyle='--', linewidth=1, label="threshold = 0.03")
+        ax2.axhline(y=-0.03, color='green', linestyle='--', linewidth=1)
+
+        ax1[row_num,1].legend(fontsize=10,fancybox=False,framealpha=0.9)
+        ax1[row_num,1].set_xlim(df_1st_derivatives.index[0],df_1st_derivatives.index[-1])
+
+        row_num += 1
+
+
+    #RANGES
+    
+    ##
+
+    #common titles
+    ax1[0,0].set_title("Concentration") 
+    ax1[0,1].set_title("Derivative")
+
+    
+    fig.tight_layout()
+    plt.show()
+    
+plot_channel(df,[9.0794158,10.924603,26.678849999999997])
+
+
+
+def plot_PSD(dataframe):
     #plot line when day changes
     new_day = None
     for i in df.index:
@@ -631,15 +738,15 @@ def plot(dataframe):
             plt.axvline(x=i, color='black', linestyle='-', linewidth=0.5)
         new_day = day
     
-    x_max_con,y_max_con = max_con()
-    x_appearance, y_appearance = appearance_time()
+    #x_max_con,y_max_con = max_con()
+    #x_appearance, y_appearance = appearance_time()
     x_maxcon,y_maxcon = maxcon_modefit()
     x_appearance_ranges, y_appearance_ranges = appearance_time_ranges()
 
-    plt.plot(x_max_con, y_max_con, '*', alpha=0.5, color='white', ms=5,label='maximum concentration') #without using mode fitting
-    plt.plot(x_appearance, y_appearance, '*', alpha=0.5, color='green', ms=5,label='appearance time') #without using mode fitting 
-    plt.plot(x_maxcon,y_maxcon, '*', alpha=0.5, color='white', ms=5) #using mode fitting 
-    plt.plot(x_appearance_ranges, y_appearance_ranges, '*', alpha=0.5, color='green', ms=5) #using mode fitting 
+    #plt.plot(x_max_con, y_max_con, '*', alpha=0.5, color='white', ms=5) #without using mode fitting
+    #plt.plot(x_appearance, y_appearance, '*', alpha=0.5, color='green', ms=5) #without using mode fitting 
+    plt.plot(x_maxcon,y_maxcon, '*', alpha=0.5, color='white', ms=5,label='maximum concentration') #using mode fitting 
+    plt.plot(x_appearance_ranges, y_appearance_ranges, '*', alpha=0.5, color='green', ms=5,label='appearance time') #using mode fitting 
     
     plt.legend(fontsize=6,fancybox=False,framealpha=0.9)
     for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
@@ -649,7 +756,7 @@ def plot(dataframe):
     plt.yscale('log')
     plt.xlim(dataframe.index[2],dataframe.index[-3])
     plt.show()
-plot(df)
+#plot_PSD(df)
 
 ####################################################
 #INSTEAD OF THIS A MEDIAN FILTER WOULD FIX IT TOO
