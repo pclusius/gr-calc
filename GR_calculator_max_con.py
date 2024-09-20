@@ -395,6 +395,10 @@ def maxcon_modefit(): #find ranges around growth rates, use these points to calc
     #create lists for results
     max_conc_time = []
     max_conc_diameter = []
+    dfs_range_start = []
+    dfs_range_end = [] 
+    df_modes = []
+
     df_ranges = find_ranges()
 
     for df_range in df_ranges: #go through every range around GRs
@@ -404,14 +408,15 @@ def maxcon_modefit(): #find ranges around growth rates, use these points to calc
         time_d_range = time_d[indices] #define time in days again depending on chosen range
         
         df_range_deriv = cal_1st_derivative(df_range,time_range=time_d_range) #calculate derivative
-        df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=5000)[0] #find modes
+        df_mode = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=5000)[0] #find modes
+        df_modes.append(df_mode) #add dfs to list
 
         #gaussian fit to every mode
-        for m in range(len(df_modes.columns)):
+        for m in range(len(df_mode.columns)):
             x = [] #time
             y = [] #concentration
-            for n in range(len(df_modes.index)):
-                concentration = df_modes.iloc[n,m] #find concentration values from the dataframe (y)
+            for n in range(len(df_mode.index)):
+                concentration = df_mode.iloc[n,m] #find concentration values from the dataframe (y)
                 time = time_d_range[n] - np.min(time_d_range)
 
                 if np.isnan(concentration) and len(y) != 0: #gaussian fit when all values of one mode have been added to the y list
@@ -425,8 +430,21 @@ def maxcon_modefit(): #find ranges around growth rates, use these points to calc
                             print("Peak outside range. Skipping.")
                         else:
                             max_conc_time = np.append(max_conc_time,params[1] + np.min(time_d_range)) #make a list of times with the max concentration time in each diameter
-                            max_conc_diameter = np.append(max_conc_diameter,float(df_modes.columns[m])) #make list of diameters with max concentrations
+                            max_conc_diameter = np.append(max_conc_diameter,float(df_mode.columns[m])) #make list of diameters with max concentrations
 
+                            #create dfs with start and end points
+                            df_range_start = pd.DataFrame(np.nan, index=df_range.index, columns=df_range.columns)
+                            df_range_end = pd.DataFrame(np.nan, index=df_range.index, columns=df_range.columns)
+                            
+                            start_time = list_days_into_UTC([x[0] + np.min(time_d_range)]) #define start/end time
+                            end_time = list_days_into_UTC([x[-1] + np.min(time_d_range)])
+
+                            df_range_start.loc[start_time[0],df_mode.columns[m]] = y[0] #replace nan value with concentration value at start/end point
+                            df_range_end.loc[end_time[0],df_mode.columns[m]] = y[-1]
+
+                            dfs_range_start.append(df_range_start) #add to list of dfs
+                            dfs_range_end.append(df_range_end)
+ 
 
                             #plot start and end time
                             #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
@@ -446,7 +464,7 @@ def maxcon_modefit(): #find ranges around growth rates, use these points to calc
 
     max_conc_time = list_days_into_UTC(max_conc_time) #change days to UTC in the list of max concentration times
     
-    return max_conc_time, max_conc_diameter
+    return max_conc_time, max_conc_diameter, df_modes, dfs_range_start, dfs_range_end
 
 def appearance_time(): #appearance time (modified from Janne's code)
     #create lists for results
@@ -527,7 +545,7 @@ def appearance_time_ranges(): #appearance time (modified from Janne's code)
     #create lists for results
     appear_time = []
     appear_diameter = []
-    
+
     df_ranges = find_ranges()
     #max_conc_times, max_conc_diameters = maxcon_modefit() #timestamps and diameters of maximum concentrations in ranges
 
@@ -588,7 +606,6 @@ def appearance_time_ranges(): #appearance time (modified from Janne's code)
                                 appear_time = np.append(appear_time,params[1] + np.min(time_d_range)) #make a list of times with the appearance time in each diameter
                                 appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp])) 
                                 
-                                    
 
                                 #plot start and end time
                                 #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
@@ -628,17 +645,39 @@ def plot_channel(dataframe,diameter_list):
                                                 ...
     Inputs dataframe with data and diameters (numerical).
     '''   
+    """
     #calculate derivatives of data in ranges
     df_ranges = find_ranges()
     df_ranges_deriv = []
+    df_modes = []
     for df_range in df_ranges:
         time_range = dataframe.index.intersection(df_range.index) #find matching indices
         indices = [dataframe.index.get_loc(row) for row in time_range]
         time_d_range = time_d[indices] #define time in days again depending on chosen range
 
         df_range_deriv = cal_1st_derivative(df_range,time_range=time_d_range) #calculate derivative
-        df_ranges_deriv.append(df_range_deriv)
-        #df_modes = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=5000)[0] #find modes
+        df_mode = find_modes_1st_deriv(df_range,df_range_deriv,threshold_deriv=0.03,threshold_diff=5000)[0] #find modes
+        
+        df_ranges_deriv.append(df_range_deriv) #add to lists
+        df_modes.append(df_mode)
+    """
+    x_maxcon,y_maxcon,df_modes, dfs_range_start, dfs_range_end = maxcon_modefit()
+
+    edges = [] #[(diameter,start_time,end_time),...], edges[0]=diameter / edges[1]=start time / edges[2]=end time
+    
+    #finding start and end times with chosen diameters
+    for diam in diameter_list:
+        for i,df_range_start,df_range_end in zip(range(len(df_modes)),dfs_range_start,dfs_range_end):
+            try:
+                #channel = df_modes[i][diam]
+                start_time = df_range_start[diam].notna().idxmax()
+                end_time = df_range_end[diam].notna().idxmax()
+
+                edges.append((diam,start_time,end_time))
+
+            except KeyError:
+                print("Channel not in this range.")
+        
 
     
     ##plotting##
@@ -662,6 +701,10 @@ def plot_channel(dataframe,diameter_list):
         ax1[row_num,0].plot(x, y, color=color1)
         ax1[row_num,0].tick_params(axis='y', labelcolor=color1)
 
+        #start and end points of ranges
+        ax1[row_num,0].plot(edges[:][1],(edges[:][0]),color="red") #start ???
+        ax1[row_num,0].plot(edges[:][2],(edges[:][0]),color="red") #end
+
         #right axis
         ax2 = ax1[row_num,0].twinx()
         color2 = "green"
@@ -675,7 +718,9 @@ def plot_channel(dataframe,diameter_list):
         row_num += 1
     
     #RANGES
-        
+    
+
+
     #derivative
     #WHOLE CHANNEL
     df_1st_derivatives = cal_1st_derivative(df,time_range=time_d)
@@ -723,7 +768,7 @@ def plot_channel(dataframe,diameter_list):
 
     
     fig.tight_layout()
-    plt.show()
+    #plt.show()
     
 plot_channel(df,[9.0794158,10.924603,26.678849999999997])
 
@@ -740,7 +785,7 @@ def plot_PSD(dataframe):
     
     #x_max_con,y_max_con = max_con()
     #x_appearance, y_appearance = appearance_time()
-    x_maxcon,y_maxcon = maxcon_modefit()
+    x_maxcon,y_maxcon,list1,list2,list3 = maxcon_modefit()
     x_appearance_ranges, y_appearance_ranges = appearance_time_ranges()
 
     #plt.plot(x_max_con, y_max_con, '*', alpha=0.5, color='white', ms=5) #without using mode fitting
