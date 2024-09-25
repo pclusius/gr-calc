@@ -421,7 +421,7 @@ def maxcon_modefit(): #find ranges around growth rates, use these points to calc
             y = [] #concentration
             for n in range(len(df_mode.index)):
                 concentration = df_mode.iloc[n,m] #find concentration values from the dataframe (y)
-                time = time_d_range[n]
+                time = time_d_range[n] - np.min(time_d_range)
 
                 if np.isnan(concentration) and len(y) != 0: #gaussian fit when all values of one mode have been added to the y list
                     mu=np.mean(x) #parameters
@@ -433,17 +433,17 @@ def maxcon_modefit(): #find ranges around growth rates, use these points to calc
                         if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
                             print("Peak outside range. Skipping.")
                         else:
-                            max_conc_time = np.append(max_conc_time,params[1]) #make a list of times with the max concentration time in each diameter
+                            max_conc_time = np.append(max_conc_time,params[1] + np.min(time_d_range)) #make a list of times with the max concentration time in each diameter
                             max_conc_diameter = np.append(max_conc_diameter,float(df_mode.columns[m])) #make list of diameters with max concentrations
                             max_conc = np.append(max_conc,params[0]) #maximum concentrations
-                            fitting_params.append(list(params)) #gaussian fit parameters
+                            fitting_params.append([params[0],params[1]+np.min(time_d_range),params[2]]) #gaussian fit parameters
 
                             #create dfs with start and end points
                             df_range_start = pd.DataFrame(np.nan, index=df_range.index, columns=df_range.columns)
                             df_range_end = pd.DataFrame(np.nan, index=df_range.index, columns=df_range.columns)
                             
-                            start_time = list_days_into_UTC([x[0]]) #define start/end time
-                            end_time = list_days_into_UTC([x[-1]])
+                            start_time = list_days_into_UTC([x[0]] + np.min(time_d_range)) #define start/end time
+                            end_time = list_days_into_UTC([x[-1]] + np.min(time_d_range))
 
                             df_range_start.loc[start_time[0],df_mode.columns[m]] = y[0] #replace nan value with concentration value at start/end point
                             df_range_end.loc[end_time[0],df_mode.columns[m]] = y[-1]
@@ -546,6 +546,8 @@ def appearance_time_ranges(): #appearance time (modified from Janne's code)
     #create lists for results
     appear_time = []
     appear_diameter = []
+    mid_conc = []
+    fitting_params = []
 
     df_ranges = find_ranges()
     #max_conc_times, max_conc_diameters = maxcon_modefit() #timestamps and diameters of maximum concentrations in ranges
@@ -580,43 +582,45 @@ def appearance_time_ranges(): #appearance time (modified from Janne's code)
                             print("Peak outside range. Skipping.")
                         else:
                             max_conc = params[0]
+
+                            #limit x and y to values between start time of mode and maximum concentration time in mode
+                            max_conc_index = closest(y, max_conc)
+                            x = x[:max_conc_index]
+                            y = y[:max_conc_index]
+                        
+                            
+                            #logistic fit
+                            if len(y) != 0:
+                                L = np.max(y) #maximum value (concentration)
+                                x0 = np.nanmean(x) #midpoint x value
+                                k = 1.0 #growth rate
+
+                                try: 
+                                    params,pcov = curve_fit(logistic,x,y,p0=[L,x0,k])
+                                    if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
+                                        print("Peak outside range. Skipping.")
+                                    else:
+                                        appear_time = np.append(appear_time,params[1] + np.min(time_d_range)) #make a list of times with the appearance time in each diameter
+                                        appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp])) 
+                                        
+                                        mid_conc_index = closest(x, params[1]) #find closest value in x to the calculated parameter for appearance time
+                                        mid_conc.append(y[mid_conc_index] + np.min(df_modes.iloc[:,dp])) #appearance time concentration (~50% maximum concentration) 
+
+                                        fitting_params.append([params[0],params[1]+np.min(time_d_range),params[2]]) #logistic fit parameters
+                                        
+
+                                        #plot start and end time
+                                        #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
+                                        #plt.plot(end_times[n], end_diams[m], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
+                                        
+                                except:
+                                    print("Diverges. Skipping.")
+                        
+                            else:
+                                print("NO Y VALUES IN THIS ROW")
         
                     except:
                         print("Diverges. Skipping.")
-
-                    
-                    #limit x and y to values between start time of mode and maximum concentration time in mode
-                    max_conc_index = closest(y, max_conc)
-                    x = x[:max_conc_index]
-                    y = y[:max_conc_index]
-                   
-                    
-                    #logistic fit
-                    if len(y) != 0:
-                        L = np.max(y) #maximum value (concentration)
-                        x0 = np.nanmean(x) #midpoint x value
-                        k = 1.0 #growth rate
-
-                        try: 
-                            params,pcov = curve_fit(logistic,x,y,p0=[L,x0,k])
-                            if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
-                                print("Peak outside range. Skipping.")
-                                if df_modes.columns[dp] == 9.0794158:
-                                    print("HERE1 y: ",y+ np.min(df_modes.iloc[:,dp]))
-                            else:
-                                appear_time = np.append(appear_time,params[1] + np.min(time_d_range)) #make a list of times with the appearance time in each diameter
-                                appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp])) 
-                                
-
-                                #plot start and end time
-                                #plt.plot(start_times[n], start_diams[m], '>', alpha=0.5, color="green", ms=3, mec="white", mew=0.3)
-                                #plt.plot(end_times[n], end_diams[m], '<', alpha=0.3, color="red", ms=3, mec="white", mew=0.3)
-                                
-                        except:
-                            print("Diverges. Skipping.")
-                
-                    else:
-                        print("NO Y VALUES IN THIS ROW")
 
                     
                     x = [] #reset
@@ -630,7 +634,7 @@ def appearance_time_ranges(): #appearance time (modified from Janne's code)
 
     appear_time = list_days_into_UTC(appear_time) #change days to UTC in the list of max concentration times
 
-    return appear_time, appear_diameter
+    return appear_time, appear_diameter, mid_conc, fitting_params
 
 #################### PLOTTING ######################
 
@@ -644,43 +648,61 @@ def plot_channel(dataframe,diameter_list):
     Assumes chosen channel has modes that have been found with the maximum concentration method!!!
     '''   
 
-    x_maxcon,y_maxcon,df_modes, dfs_range_start, dfs_range_end, max_conc, fitting_parameters = maxcon_modefit()
+    x_maxcon,y_maxcon,df_modes, dfs_range_start, dfs_range_end, max_conc, fitting_parameters_gaus = maxcon_modefit()
+    appear_time, appear_diameter, mid_conc,fitting_parameters_logi = appearance_time_ranges()
     df_ranges = find_ranges()
-
+    print("parameterss:",fitting_parameters_logi)
+    print("appear diameterss",appear_diameter)
     edges = []              #[(diameter,start_time,end_time), ...]
     xy_maxcon =  []         #[(max con diameter, max con time, max con), ...]
-    fitting_params = []     #[(max con diameter, *params...), ...]
+    fitting_params_gaus = []     #[(max con diameter, *params...), ...]
+    fitting_params_logi = []     #[(appearance time diameter, *params...), ...]
     range_times_UTC = []    #[(diameter, time in UTC), ...]
+    appearances = []        #[(diameter, time, concentration), ...] 
     
     #finding data with chosen diameters
-    range_counter = 0
     for diam in diameter_list:
+
+        #MAXIMUM CONCENTRATION & TIME
+        indices = [i for i, a in enumerate(y_maxcon) if a == diam]
+        xy_maxcons = [(y_maxcon[b],x_maxcon[b],max_conc[b]) for b in indices]
+        [xy_maxcon.append(i) for i in xy_maxcons]
+
+        #FITTING PARAMETERS FOR GAUSSIAN FIT
+        indices = [i for i, a in enumerate(y_maxcon) if a == diam]
+        fittings = [(y_maxcon[b],fitting_parameters_gaus[b][0],fitting_parameters_gaus[b][1],fitting_parameters_gaus[b][2]) for b in indices]
+        [fitting_params_gaus.append(i) for i in fittings]
+
+        #FITTING PARAMETERS FOR LOGISTIC FIT
+        indices = [i for i, a in enumerate(appear_diameter) if a == diam]
+        fittings = [(appear_diameter[b],fitting_parameters_logi[b][0],fitting_parameters_logi[b][1],fitting_parameters_logi[b][2]) for b in indices]
+        [fitting_params_logi.append(i) for i in fittings]
+
+        #APPEARANCE TIME & CONCENTRATION
+        indices = [i for i, a in enumerate(appear_diameter) if a == diam]
+        appearance = [(appear_diameter[b],appear_time[b],mid_conc[b]) for b in indices]
+        [appearances.append(i) for i in appearance]
+        
         for df_range_start,df_range_end in zip(dfs_range_start,dfs_range_end):
             try:
-                #START/END TIME
+                #START/END TIME OF MODE
                 start_time = df_range_start[diam].notna().idxmax() #finding the start/end value in df
                 end_time = df_range_end[diam].notna().idxmax()
 
                 if start_time != end_time: #checking that start time and end time aren't the same
                     edges.append((diam,start_time,end_time))
 
-                #MAXIMUM CONCENTRATION & TIME
-                indices = [i for i, a in enumerate(y_maxcon) if a == diam]
-                xy_maxcon.append([(y_maxcon[b],x_maxcon[b],max_conc[b]) for b in indices])
-
-                #FITTING PARAMETERS
-                indices = [i for i, a in enumerate(y_maxcon) if a == diam]
-                fitting_params.append([(y_maxcon[b],fitting_parameters[b][0],fitting_parameters[b][1],fitting_parameters[b][2]) for b in indices])
-
-                #FIND RANGE OF MODE AND NOT DF RANGE START
+                #TIME RANGE OF MODE
                 time_range = df.index.intersection(df_range_start.loc[start_time:end_time].index) #UTC time for each range with wanted diameters
-                range_times_UTC.append((diam,time_range)) 
+                
+                if start_time != end_time: #checking that start time and end time aren't the same
+                    range_times_UTC.append((diam,time_range)) 
 
             except KeyError:
                 print("Channel not in this range.")
-            
-            range_counter += 1
 
+    #find unique values
+    xy_maxcon = list(dict.fromkeys(xy_maxcon))
 
     ##plotting##
     fig, ax1 = plt.subplots(len(diameter_list),2,figsize=(18, 15), dpi=90)
@@ -691,6 +713,7 @@ def plot_channel(dataframe,diameter_list):
     for diam in diameter_list:
         y = dataframe[diam]
         y_list.append(y)
+
 
     row_num = 0 #keeps track of which row of figure we are plotting in
     for y in y_list:
@@ -719,29 +742,51 @@ def plot_channel(dataframe,diameter_list):
         ax2.tick_params(axis='y', labelcolor=color2)
         ax2.set_yscale('log')
 
-        #gaussian fit for both scales
+        #gaussian & logistic fit for both scales
         #we need time in days
         range_times_days = []
         for i in range_times_UTC:
             time_range = df.index.intersection(i[1]) #find matching indices
             indices = [df.index.get_loc(row) for row in time_range]
             range_times_days.append(time_d[indices]) #define time in days again depending on chosen range
-        
-        for params,time_UTC,time_days in zip(fitting_params,range_times_UTC,range_times_days):
-            diam, a, mu, sigma = params[0]
+        #gaussian
+        for params,time_UTC,time_days in zip(fitting_params_gaus,range_times_UTC,range_times_days):
+            diam, a, mu, sigma = params
             if diam == diameter_list[row_num]:
                 ax1[row_num,0].plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="orange")
                 ax2.plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="orange")
-        
+        #logistic
+        #choose corresponding time ranges, logistic fit succeedes fewer times than gaussian fit
+        t_UTC = []
+        t_days = []
+        for time_UTC,time_days in zip(range_times_UTC,range_times_days):
+            diam, time1 = time_UTC
+            time2 = time_days
+            if diam == diameter_list[row_num]:
+                t_UTC.append((diam,time1))
+                t_days.append(time2)
+
+        for params,time_UTC,time_days in zip(fitting_params_logi,t_UTC,t_days):
+            diam1, L, x0, k = params
+            diam2, time = time_UTC
+            if diam1 == diameter_list[row_num] and diam2 == diameter_list[row_num]:
+                ax1[row_num,0].plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="yellow")
+                ax2.plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="yellow")
+
         #maximum concentration
         for i in xy_maxcon:
-            print("XY_MAXCON:",i)
-            print("i[0]",i[0])
-            diam, x_maxcon, y_maxcon = i[0]
+            diam, x_maxcon, y_maxcon = i
             if diam == diameter_list[row_num]:
                 ax1[row_num,0].plot(x_maxcon, y_maxcon, '*', color="white", ms=8,alpha=0.8)
                 ax2.plot(x_maxcon, y_maxcon, '*', color="white", ms=8,alpha=0.8)
 
+        #appearance time
+        for i in appearances:
+            diam, time, conc = i
+            print("appear:",i)
+            if diam == diameter_list[row_num]:
+                ax1[row_num,0].plot(time, conc, '*', color="green", ms=8,alpha=0.8)
+                ax2.plot(time, conc, '*', color="green", ms=8,alpha=0.8)
 
         #ax1[row_num,0].legend(fontsize=10,fancybox=False,framealpha=0.9)
         ax1[row_num,0].set_xlim(dataframe.index[0],dataframe.index[-1])
@@ -783,8 +828,8 @@ def plot_channel(dataframe,diameter_list):
 
         #maximum concentration
         for i in xy_maxcon:
-            diam, x_maxcon, y_maxcon = i[0]
-            y_maxcon = y_maxcon*0
+            diam, x_maxcon, y_maxcon = i
+            y_maxcon = y_maxcon*0 #to place the start lower where y = 0
             if diam == diameter_list[row_num]:
                 ax1[row_num,1].plot(x_maxcon, y_maxcon, '*', color="white",ms=8,alpha=0.8)
 
@@ -815,7 +860,7 @@ def plot_channel(dataframe,diameter_list):
     fig.tight_layout()
     plt.show()
     
-plot_channel(df,[26.678849999999997,35.640105,41.193152])
+plot_channel(df,[9.0794158,47.609805,63.59705399999999])
 
 
 
@@ -831,7 +876,7 @@ def plot_PSD(dataframe):
     #x_max_con,y_max_con = max_con()
     #x_appearance, y_appearance = appearance_time()
     x_maxcon,y_maxcon,*others = maxcon_modefit()
-    x_appearance_ranges, y_appearance_ranges = appearance_time_ranges()
+    x_appearance_ranges, y_appearance_ranges,*others = appearance_time_ranges()
 
     #plt.plot(x_max_con, y_max_con, '*', alpha=0.5, color='white', ms=5) #without using mode fitting
     #plt.plot(x_appearance, y_appearance, '*', alpha=0.5, color='green', ms=5) #without using mode fitting 
