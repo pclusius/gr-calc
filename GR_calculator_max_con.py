@@ -187,7 +187,8 @@ def find_modes(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes,
 
     #determine start and end points
     start_points = threshold & (~threshold.shift(1,fill_value=False))
-    end_points = threshold & (~threshold.shift(-1,fill_value=False))
+    #end_points = threshold & (~threshold.shift(-1,fill_value=False))
+    end_points = 
 
     #finding values within start and end points
     start_times_temp = []
@@ -196,11 +197,14 @@ def find_modes(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes,
     conc_diff = threshold_diff #concentration difference between the start and end times
 
     for diam in df_deriv.columns:
+        
         for timestamp in df_deriv.index: #identify pairs of start and end times
-            if start_time != None and end_time != None and abs(dataframe.loc[start_time,diam]-dataframe.loc[end_time,diam]) <= conc_diff: #when start and end times have their values find list of values between them
+            if start_time != None: #when start and end times have their values find list of values between them
                 subset = dataframe[diam].loc[start_time:end_time]
                 #fill dataframe with mode ranges
                 df_mode_ranges.loc[subset.index,diam] = subset
+
+                end_time = ( max(df_deriv.loc[:,diam]) + df_deriv.loc[:,diam] ) / 2
 
                 #save start and end times with their diameters in lists
                 start_time_list.append(start_time)
@@ -214,7 +218,7 @@ def find_modes(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes,
                 end_time = None
             
             #choose a previous start time if the difference of concentration values is too big
-            elif start_time != None and end_time != None and abs(dataframe.loc[start_time,diam]-dataframe.loc[end_time,diam]) > conc_diff:
+            elif start_time != None:
                 for i in reversed(start_times_temp):
                     start_time = i
                     if abs(dataframe.loc[start_time,diam]-dataframe.loc[end_time,diam]) <= conc_diff:
@@ -723,23 +727,27 @@ def plot_channel(dataframe,diameter_list):
         for i in mode_edges:
             diam, start, end = i
             if diam == diameter_list[row_num] and i not in found_ranges:
-                ax1[row_num,0].axvline(x=start, color='red', linestyle='--', linewidth=1,label="mode edges")
-                ax1[row_num,0].axvline(x=end, color='red', linestyle='--', linewidth=1)
-                ax1[row_num,0].annotate(f'start', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='red')
-                ax1[row_num,0].annotate(f'end', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='red')
-                found_ranges.append(i) #plot one range once
-
-        #start and end points of ranges
-        found_ranges = []
-        for i in range_edges:
-            diam, start, end = i
-            if diam == diameter_list[row_num] and i not in found_ranges:
                 ax1[row_num,0].axvline(x=start, color='black', linestyle='--', linewidth=1,label="mode edges")
                 ax1[row_num,0].axvline(x=end, color='black', linestyle='--', linewidth=1)
-                ax1[row_num,0].annotate(f'start', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
-                ax1[row_num,0].annotate(f'end', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
+                ax1[row_num,0].annotate(f'S', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
+                ax1[row_num,0].annotate(f'E', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
                 found_ranges.append(i) #plot one range once
-
+        
+        #start and end points of ranges
+        cmap = plt.get_cmap('Dark2') #colors for each pair of start and end
+        found_ranges = []
+        num = 0
+        for edges in range_edges:
+            diam, start, end = edges
+            if diam == diameter_list[row_num] and edges not in found_ranges:
+                color = cmap(num)
+                ax1[row_num,0].axvline(x=start, color=color, linestyle='--', linewidth=1,label="mode edges")
+                ax1[row_num,0].axvline(x=end, color=color, linestyle='--', linewidth=1)
+                ax1[row_num,0].annotate(f'S', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color=color)
+                ax1[row_num,0].annotate(f'E', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color=color)
+                found_ranges.append(edges) #plot one range once
+                num += 0.125
+        
 
         #right axis (logarithmic scale)
         ax2 = ax1[row_num,0].twinx()
@@ -808,9 +816,6 @@ def plot_channel(dataframe,diameter_list):
         ax1[row_num,1].set_ylabel("d(dN/dlogDp)dt [cm^(-3)*s^(-1)]", color=color1)
         ax1[row_num,1].plot(x, y, color=color1)
         ax1[row_num,1].tick_params(axis='y', labelcolor=color1)
-        
-        
-
         ax1[row_num,1].axhline(y=0.03, color="royalblue", linestyle='--', linewidth=1,label="threshold = 0.03")
         ax1[row_num,1].axhline(y=-0.03, color="royalblue", linestyle='--', linewidth=1)
         
@@ -819,22 +824,26 @@ def plot_channel(dataframe,diameter_list):
         for i in mode_edges:
             diam, start, end = i
             if diam == diameter_list[row_num] and i not in found_ranges:
-                ax1[row_num,1].axvline(x=start, color='red', linestyle='--', linewidth=1)
-                ax1[row_num,1].axvline(x=end, color='red', linestyle='--', linewidth=1)
-                ax1[row_num,1].annotate(f'start', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='red')
-                ax1[row_num,1].annotate(f'end', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='red')
+                ax1[row_num,1].axvline(x=start, color='black', linestyle='--', linewidth=1)
+                ax1[row_num,1].axvline(x=end, color='black', linestyle='--', linewidth=1)
+                ax1[row_num,1].annotate(f'S', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
+                ax1[row_num,1].annotate(f'E', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
                 found_ranges.append(i) #plot one range once
 
         #start and end points of ranges
+        cmap = plt.get_cmap('Dark2') #colors for each pair of start and end
         found_ranges = []
-        for i in range_edges:
-            diam, start, end = i
-            if diam == diameter_list[row_num] and i not in found_ranges:
-                ax1[row_num,1].axvline(x=start, color='black', linestyle='--', linewidth=1,label="mode edges")
-                ax1[row_num,1].axvline(x=end, color='black', linestyle='--', linewidth=1)
-                ax1[row_num,1].annotate(f'start', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
-                ax1[row_num,1].annotate(f'end', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color='black')
-                found_ranges.append(i) #plot one range once
+        num = 0
+        for edges in range_edges:
+            diam, start, end = edges
+            if diam == diameter_list[row_num] and edges not in found_ranges:
+                color = cmap(num)
+                ax1[row_num,1].axvline(x=start,  color=color, linestyle='--', linewidth=1,label="mode edges")
+                ax1[row_num,1].axvline(x=end, color=color, linestyle='--', linewidth=1)
+                ax1[row_num,1].annotate(f'S', (start, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold', color=color)
+                ax1[row_num,1].annotate(f'E', (end, float(np.max(y))), textcoords="offset points", xytext=(0, 0), ha='center', fontsize=8, fontweight='bold',color=color)
+                found_ranges.append(edges) #plot one range once
+                num += 0.125
 
         #maximum concentration
         for i in xy_maxcon:
@@ -869,7 +878,7 @@ def plot_channel(dataframe,diameter_list):
 
     fig.tight_layout()
     plt.show()  
-plot_channel(df,[9.0794158,63.59705399999999,73.503747,175.15373])
+plot_channel(df,[19.030848000000002,23.083933,26.678849999999997,30.834151000000002])
 
 
 
