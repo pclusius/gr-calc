@@ -188,7 +188,6 @@ def find_modes(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes,
     #determine start and end points
     start_points = threshold & (~threshold.shift(1,fill_value=False))
     #end_points = threshold & (~threshold.shift(-1,fill_value=False))
-    end_points = 
 
     #finding values within start and end points
     start_times_temp = []
@@ -199,12 +198,10 @@ def find_modes(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes,
     for diam in df_deriv.columns:
         
         for timestamp in df_deriv.index: #identify pairs of start and end times
-            if start_time != None: #when start and end times have their values find list of values between them
+            if start_time != None and abs(dataframe.loc[start_time,diam]-dataframe.loc[end_time,diam]) <= conc_diff: #when start and end times have their values find list of values between them
                 subset = dataframe[diam].loc[start_time:end_time]
                 #fill dataframe with mode ranges
                 df_mode_ranges.loc[subset.index,diam] = subset
-
-                end_time = ( max(df_deriv.loc[:,diam]) + df_deriv.loc[:,diam] ) / 2
 
                 #save start and end times with their diameters in lists
                 start_time_list.append(start_time)
@@ -218,7 +215,7 @@ def find_modes(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes,
                 end_time = None
             
             #choose a previous start time if the difference of concentration values is too big
-            elif start_time != None:
+            elif start_time != None and abs(dataframe.loc[start_time,diam]-dataframe.loc[end_time,diam]) > conc_diff:
                 for i in reversed(start_times_temp):
                     start_time = i
                     if abs(dataframe.loc[start_time,diam]-dataframe.loc[end_time,diam]) <= conc_diff:
@@ -226,9 +223,25 @@ def find_modes(dataframe,df_deriv,threshold_deriv,threshold_diff): #finds modes,
                                   
             elif start_points.loc[timestamp,diam] == True and df_deriv.loc[timestamp,diam] > 0: #checks also if the starting point derivative is neg or not
                 start_time = timestamp
+                start_conc = df_deriv.loc[timestamp,diam]
+
+                #finding end time after local maximum concentration 
+                try:
+                    time_limita_i = df_deriv.index.get_loc(start_time) + 14
+                    time_limita = df_deriv.index[time_limita_i]
+                except IndexError:
+                    time_limita = df_deriv.index[-1]
+                end_conc = ( max(df_deriv.loc[start_time:time_limita,diam].values) + start_conc ) / 2  #(N_max + N_start)/2
+                time_limitb = df_deriv.index[df_deriv.loc[:,diam] == max(df_deriv.loc[start_time:time_limita,diam].values)].tolist()[0]
+                print("A",time_limita,"B",time_limitb)
+                end_conc_i = closest(df_deriv.loc[time_limitb:time_limita,diam],end_conc)  
+                end_time = df_deriv.index[end_conc_i]
+                start_points.loc[end_time,diam] = 0
+                print("ENDCONC:",( max(df_deriv.loc[:,diam].values) + start_conc ) / 2)
+                print("ENDTIME:",end_time)
+
                 start_times_temp.append(start_time)
-            elif end_points.loc[timestamp,diam] == True and start_time != None and df_deriv.loc[timestamp,diam] < 0:
-                end_time = timestamp
+
             else:
                 continue
     
@@ -878,7 +891,7 @@ def plot_channel(dataframe,diameter_list):
 
     fig.tight_layout()
     plt.show()  
-plot_channel(df,[19.030848000000002,23.083933,26.678849999999997,30.834151000000002])
+#plot_channel(df,[19.030848000000002,23.083933,26.678849999999997,30.834151000000002])
 
 
 
@@ -910,7 +923,7 @@ def plot_PSD(dataframe):
     plt.yscale('log')
     plt.xlim(dataframe.index[2],dataframe.index[-3])
     plt.show()
-#plot_PSD(df)
+plot_PSD(df)
 
 ####################################################
 #INSTEAD OF THIS A MEDIAN FILTER WOULD FIX IT TOO
