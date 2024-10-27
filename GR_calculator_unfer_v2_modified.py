@@ -114,7 +114,7 @@ df1[(df1<0)] = 0                     ## Treat negative data as zero
 df1[(df1.sum(axis=1)==0)] = np.nan   ## Discart a whole zero size distribution
 df1 = df1.dropna()
 
-df1 = df1.resample('10Min').mean().interpolate(method='time', limit_area='inside', limit=6) ###CHANGE 5Min -> 10Min CHECK FROM HERE UP
+#df1 = df1.resample('10Min').mean().interpolate(method='time', limit_area='inside', limit=6) ###CHANGE 5Min -> 10Min CHECK FROM HERE UP ###commented away
 
 N_tot = list(df1["total number concentration (N)"]) ### save total number concentrations to a list
 df1 = df1.drop(['total number concentration (N)'], axis=1) ### drop N_tot from the dataframe
@@ -125,10 +125,50 @@ df1 = df1.drop(['total number concentration (N)'], axis=1) ### drop N_tot from t
 df1.columns = pd.to_numeric(diameters) ### rename columns back to diameters
 
 ### median filter
-for i in df1.columns:
-    #df1[i] = df1[i].rolling(window=3, center=True).median() ### window of 3 datapoints i.e. 1 neighbouring value
-    df1[i] = df1[i].rolling(window=5, center=True).median() ### window of 5 datapoints i.e. 2 neighbouring value
-df1.dropna(inplace=True)
+#for i in df1.columns:
+#    df1[i] = df1[i].rolling(window=5, center=True).median() ### window of 5 datapoints i.e. 2 neighbouring value
+#df1.dropna(inplace=True)
+
+###
+def avg_filter(dataframe,resolution):
+    '''
+    Smoothens data in dataframe with average filter and given resolution (minutes), 
+    i.e. takes averages in a window without overlapping ranges.
+    Discards blocks of time with incomplete timestamps.
+    Returns smoothened dataframe and new time in days for that dataframe.
+    '''
+
+    dataframe.index = dataframe.index.round('10T') #change timestamps to be exactly 10min intervals
+
+    #if average is taken of less than 3 datapoints, neglect that datapoint
+    full_time_range = pd.date_range(start=dataframe.index.min(), end=dataframe.index.max(), freq='10T')
+    missing_timestamps = full_time_range.difference(dataframe.index) #missing timestamps
+    blocks = pd.date_range(start=dataframe.index.min(), end=dataframe.index.max(), freq=f'{resolution}min') #blocks of resolution
+    
+    dataframe = dataframe.resample(f'{resolution}min').mean() #change resolution and take average of values
+    dataframe = dataframe.shift(1, freq=f'{int(resolution/2)}min') #set new timestamps to be in the middle of the new resolution
+
+    irrelevant_ts = []
+    irrelevant_i = []
+    missing_ts_i = [] #needs to be in order from small to big (for insterting nan values)
+    for timestamp in missing_timestamps:
+        for i in range(len(blocks) - 1):
+            if blocks[i] <= timestamp < blocks[i + 1]: #check if timestamp is in this 30min block
+                irrelevant_ts.append(blocks[i] + pd.Timedelta(minutes=15))  #add 15 minutes to center the block
+                irrelevant_i.append(dataframe.index.get_loc(blocks[i] + pd.Timedelta(minutes=15))) #save index of the block
+                missing_ts_i.append(full_time_range.get_loc(timestamp)) #save indices of missing timestamps
+
+    #remove irrelevant timestamps
+    for dp in dataframe.columns:
+        for ts in irrelevant_ts:
+            dataframe.loc[ts,dp] = np.nan #set nan value for irrelevant datapoints
+ 
+
+    return dataframe
+df1 = avg_filter(df1,resolution=30)
+
+
+###
 
 #with this we can check the format
 df1.to_csv('./combined_data.csv', sep=',', header=True, index=True, na_rep='nan')
@@ -279,19 +319,19 @@ def find_segments(df,abr):
 
 ##################################################
 
-def combine_segments(df, abr, segments, mape_threshold=2):
+def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 -> mape_threshold=5
     combined_segments = []
     start = 0
 
     while start < len(segments):
         end = start + 1
-        while end < len(segments):
+        while end < len(segments): ### goes through adding the following black point and checks that is 30mins time difference from the last point, if so it will check error also, keeps extending the GR size
             if end >= len(segments):
                 break
             
             comb_segs_data = df[abr + '_d'].loc[segments[start]:segments[end]]
             time_difference = segments[end] - segments[end - 1]
-            if time_difference != timedelta(minutes=10): ###checks if the time difference is not 5mins!!! CHANGED: timedelta(minutes=5) -> timedelta(minutes=10)
+            if time_difference != timedelta(minutes=30): ### timedelta(minutes=5) -> timedelta(minutes=30)
                 break
             
             x_comb = np.arange(len(comb_segs_data))
@@ -323,7 +363,7 @@ def filter_segments(df, abr, combined_segments):
         
         data = df[abr + '_d'].loc[segment[0]:segment[1]]
               
-        if len(data) >= 5 and not check_time_gaps(df.loc[segment[0]:segment[1]].index, 120):
+        if len(data) >= 4 and not check_time_gaps(df.loc[segment[0]:segment[1]].index, 120): ### len(data)>=5 -> len(data)>=4
                 
             curve, popt = fit_curve(data)
             if curve is not None and popt is not None:
@@ -494,14 +534,14 @@ def process_data2(dfA, m1, dfB, m2, diameter_diff):
         df_m1 = df_modes.loc[start1:end1, [m1+'_A', m1+'_d', m1+'_s']]
         df_m1.columns = ['m_A', 'm_d', 'm_s']
     
-        start_target = dfA['end'].iloc[j] + pd.Timedelta(minutes=10) ### minutes=5 -> minutes=10
+        start_target = dfA['end'].iloc[j] + pd.Timedelta(minutes=30) ### minutes=5 -> minutes=30
         #print(start_target)
         if start_target in dfB.index.values:
             #print(start_target)
             
             idx_position = dfB.index.get_loc(start_target)
             
-            if (dfB['d_initial'].iloc[idx_position] - dfA['d_final'].iloc[j]) < diameter_diff:
+            if (dfB['d_initial'].iloc[idx_position] - dfA['d_final'].iloc[j]) < diameter_diff: ###Checks if the GR of the previous mode is close enough with the GR in the current mode
             
                 start2 = dfB.index[idx_position]       # !!!
                 end2 = dfB['end'].iloc[idx_position]
@@ -519,9 +559,9 @@ def process_data2(dfA, m1, dfB, m2, diameter_diff):
                 mape1 = np.mean(erros_absolutos / y_comb) * 100
                 #print(mape1)
                 if mape1 <= 3:
-                    if idx_position + 1 < len(dfB) and (dfB.index[idx_position + 1] - dfB['end'].iloc[idx_position] > pd.Timedelta(minutes=10)): ### minutes=5 -> minutes=10
+                    if idx_position + 1 < len(dfB) and (dfB.index[idx_position + 1] - dfB['end'].iloc[idx_position] > pd.Timedelta(minutes=30)): ### minutes=5 -> minutes=30
                         
-                        df_m2_next = df_modes.loc[start2:(dfB.index[idx_position + 1] - pd.Timedelta(minutes=10)), [m2+'_A', m2+'_d', m2+'_s']] ### minutes=5 -> minutes=10
+                        df_m2_next = df_modes.loc[start2:(dfB.index[idx_position + 1] - pd.Timedelta(minutes=30)), [m2+'_A', m2+'_d', m2+'_s']] ### minutes=5 -> minutes=30
                         df_m2_next.columns = ['m_A', 'm_d', 'm_s']
                         df_comb2 = pd.concat([df_m1, df_m2_next], axis=0)
                         #print(df_comb2)
