@@ -11,7 +11,7 @@ from datetime import datetime, timedelta ###CHANGE added timedelta
 from lognormal_fit_multiprocessing_unfer_modified import Main as logf ###CHANGE lognormal_fit_multiprocessing_unfer -> lognormal_fit_multiprocessing_unfer_modified
 from multiprocessing import Process
 
-path1 = r"./dmps Nesrine/dm160612.sum"                   ###CHANGE ./CerroMirador_SMPS_INV&CORR_Apr19toMar23.csv -> file name changed  #put here the data file name
+path1 = r"./dmps Nesrine/dm160428.sum"                   ###CHANGE ./CerroMirador_SMPS_INV&CORR_Apr19toMar23.csv -> file name changed  #put here the data file name
 dados1 = pd.read_csv(path1, sep='\s+',engine='python')      ###CHANGE separate with "\s+" instead of ";"
 df1 = pd.DataFrame(dados1)
 diameters_str = list(df1.columns[2:]) ### save diameters before replacing them with new column names
