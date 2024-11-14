@@ -414,7 +414,7 @@ def extract_data (df_subset, results, abr):
         mean_s = df_subset[abr + '_s'].loc[start:end].mean()
 
         curve, popt = fit_curve(data)
-        GR = popt[0] * 12 
+        GR = popt[0] * 2 ###changed *12 -> *2 due to resolution change
         lista.append([start, end, dt, d_initial, d_final, round(d_mean,1), round(mean_A,2), round(mean_s,3), round(GR, 1)])
         segment_data.append(data)
         fitted_curves.append((curve, popt))
@@ -594,7 +594,7 @@ def process_data2(dfA, m1, dfB, m2, diameter_diff):
                     mean_s = df_comb['m_s'].mean()
                     
                     curve, popt = fit_curve(df_comb['m_d'])
-                    GR = popt[0] * 12  
+                    GR = popt[0] * 2 ###changed *12 -> *2
                     mode = m1+'_'+m2
                 
                     lista.append([start, end, dt, d_initial, d_final, round(d_mean,1), round(mean_A, 2), round(mean_s, 3), round(GR, 1), mode])               
@@ -699,7 +699,7 @@ def plot2(df):
     #print("df_modes 2:",df_modes) ###
     
     
-    plt.plot(df_modes.index, df_modes['m1_d'], '*', alpha=0.5, color='black', markersize=5, label='mode fitting') ###ADDED label='mode fitting'
+    plt.plot(df_modes.index, df_modes['m1_d'], '*', alpha=0.5, color='black', markersize=5, label='moodisovitus') ###ADDED label='mode fitting'
     plt.plot(df_modes.index, df_modes['m2_d'], '*', alpha=0.5, color='black', markersize=5)
     plt.plot(df_modes.index, df_modes['m3_d'], '*', alpha=0.5, color='black', markersize=5)
     plt.plot(df_modes.index, df_modes['m4_d'], '*', alpha=0.5, color='black', markersize=5)
@@ -750,7 +750,7 @@ def plot2(df):
         curve, popt = fit_curve(data)
         #print(curve)
                   
-        slope = round((popt[0] * 12), 1)
+        slope = round((popt[0] * 2), 1) ###changed *12 -> *2
         x_values = np.arange(len(data))
         plt.plot(data.index, curve(x_values, *popt), lw=3) 
    
@@ -759,7 +759,7 @@ def plot2(df):
         midpoint_value = curve(midpoint_idx, *popt)
         
         plt.annotate(f'{slope} nm/h', (midpoint_time, midpoint_value), 
-                     textcoords="offset points", xytext=(0, 7), ha='center', fontsize=5, fontweight='bold') ### xytext=(0, 10) -> xytext=(0, 7) & fontsize=8 -> fontsize=5   
+                     textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold') ### xytext=(0, 10) -> xytext=(0, 7) & fontsize=8 -> fontsize=5   
       
     #plt.show() ###
     return ax ###added to use ax in my code
