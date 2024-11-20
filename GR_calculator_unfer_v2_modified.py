@@ -8,14 +8,14 @@ Created on Tue May  7 19:54:10 2024
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import ruptures as rpt
 from matplotlib import colors
+import matplotlib ###
+matplotlib.use("Qt5Agg") ###backend changes the plotting style
 from datetime import timedelta
 from datetime import datetime
 from scipy.optimize import curve_fit, OptimizeWarning 
 import warnings
 from scipy import stats
-import os ###
 from os import listdir ###
 
 ###################################################################
@@ -52,6 +52,7 @@ def input_data_from_folder():
 #paths = input_data()
 """
 
+"""
 def input_data():
     file_names = []
     modefit_names = []
@@ -65,6 +66,9 @@ def input_data():
             break
     return file_names,modefit_names
 file_names, modefit_names = input_data()
+"""
+file_names = ["dm160612.sum"]
+modefit_names = ["output_modefit_2016_06_12.csv"]
 
 ###modified from Janne's code "NpfEventAnalyzer.py":
 ### load data for n days: ###
@@ -166,8 +170,6 @@ def avg_filter(dataframe,resolution):
 
     return dataframe
 df1 = avg_filter(df1,resolution=30)
-
-
 ###
 
 #with this we can check the format
@@ -699,7 +701,7 @@ def plot2(df):
     #print("df_modes 2:",df_modes) ###
     
     
-    plt.plot(df_modes.index, df_modes['m1_d'], '*', alpha=0.5, color='black', markersize=5, label='moodisovitus') ###ADDED label='mode fitting'
+    plt.plot(df_modes.index, df_modes['m1_d'], '*', alpha=0.5, color='black', markersize=5, label='mode fitting') ###ADDED label='mode fitting'
     plt.plot(df_modes.index, df_modes['m2_d'], '*', alpha=0.5, color='black', markersize=5)
     plt.plot(df_modes.index, df_modes['m3_d'], '*', alpha=0.5, color='black', markersize=5)
     plt.plot(df_modes.index, df_modes['m4_d'], '*', alpha=0.5, color='black', markersize=5)
