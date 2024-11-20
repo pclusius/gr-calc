@@ -1114,7 +1114,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     fig.tight_layout()
 plot_channel(df,[df.columns[7],df.columns[13],df.columns[14]],choose_GR=None,draw_range_edges=True)
 
-#plt.savefig("PSD_oneday.png")
+plt.savefig("PSD_oneday.png")
 plt.show()
 
 ####################################################
