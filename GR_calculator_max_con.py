@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
 from operator import itemgetter
+from collections import defaultdict
 
 '''
 This code assumes dmps data.
@@ -157,11 +158,36 @@ def flatten_list(list):
     returns a flattened list. 
     '''
     return [x for xs in list for x in xs]
-def check_time_gap(times, max_diff_mins):
-    time_gaps = abs(times[0]-times[1])
-    max_diff_days = max_diff_mins/(60*24)
-    if time_gaps <= max_diff_days:
-        return times 
+def combine_connected_pairs(list):
+    ''' From AI
+    Takes in a list of lists with pairs of datapoints and
+    returns a list with lists pooled together containing
+    overlapping elements. 
+    '''
+    # Convert arrays to tuples for hashing and build adjacency list
+    graph = defaultdict(set)
+    for p1, p2 in list:
+        graph[tuple(p1)].add(tuple(p2))
+        graph[tuple(p2)].add(tuple(p1))
+    
+    # Find connected components using DFS
+    visited = set()
+    combined_lists = []
+    
+    for node in graph:
+        if node not in visited:
+            stack = [node]
+            component = []
+            while stack:
+                current = stack.pop()
+                if current not in visited:
+                    visited.add(current)
+                    component.append(current)
+                    stack.extend(graph[current] - visited)
+            combined_lists.append(component)
+    
+    # Convert back to numpy arrays if needed
+    return [[np.array(point) for point in component] for component in combined_lists]
 
 #define mathematical functions for fitting
 def gaussian(x,a,x0,sigma): 
@@ -545,78 +571,120 @@ def find_dots(times,diams):
     Returns lists with wanted times and diameters for plotting growth rates.
     '''
     datapoints = []
+    data_pairs = []
     
     #combine to the same list
     [datapoints.append([time,diam]) for time, diam in zip(times,diams)]
     
     #sort data to order by diameter
     data_sorted = np.array(sorted(datapoints, key=itemgetter(1)))
-    print(data_sorted)
+    #print("datasorted",data_sorted)
 
-    max_time_diff = 240/(60*24) #max time difference in days = 240mins
-    #max_diam_diff = np.log(x+5) #logarithimic depencade, define a function that depends on diameter
+    max_time_diff = 90/(60*24) #max time difference in days = 90mins = 1,5h
+
     for i, datapoint in enumerate(data_sorted):
-        sub_data = [] #list for data of one line
+        #sub_data = [] #list for data pairs next to each other
+        #sub_data.append(datapoint) #add first datapoint to the list already
         
-        try: #at the start there is no previous datapoint so we need this construct
-            next_datapoint = data_sorted[i+1]
-            time1 = next_datapoint[0]
-            time = datapoint[0]
-            diam1 = next_datapoint[1]
-            diam = datapoint[1]
-            time_diff = abs(time1-time)
-            diam_diff = abs(diam1-diam)
-            
-            nextnext_diam = df.columns.values[df.columns.values > diam][1] # 2 diameter points forward after current diameter
-            max_diam_diff = abs(diam-nextnext_diam) #max one diameter channel empty in between
-            
-            if time_diff <= max_time_diff and diam_diff <= max_diam_diff:    #check time and diameter difference
+        #find pairs of nearby datapoints and add them to data_pairs
+        for ii in range(1,len(datapoints)-i): #check for next datapoint in data_sorted list with required time and diam difference
+            ''' in the last datapoint, range becomes and empty list and there should be an IndexError?'''
+            try: #in case we reach the end with no "next datapoint"
+                next_datapoint = data_sorted[i+ii]
+                time1 = next_datapoint[0]
+                time = datapoint[0]
+                diam1 = next_datapoint[1]
+                diam = datapoint[1]
+                time_diff = abs(time1-time)
+                diam_diff = abs(diam1-diam)
                 
-            else: #keep looking for next datapoint until end of points if the next one isnt suitable
-                nearby_datapoints = [[x,y] for x, y in zip(data_sorted[:,0],data_sorted[:,1]) if abs(x-data_sorted[i,0]) <= max_time_diff]
+                nextnext_diam = df.columns.values[df.columns.values > diam][1] # 2 diameter points forward after current diameter
+                max_diam_diff = abs(diam-nextnext_diam) #max one diameter channel empty in between
                 
-                      
-        except IndexError:
-            print("Index error!")
-            continue
+                if time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
+                    #sub_data.append(next_datapoint) #add next valid datapoint to the sublist
+                    data_pairs.append([datapoint,next_datapoint])
+                    break #next point found 
+                elif diam_diff > max_diam_diff: #if diam difference is already too big break loop
+                    break
+                else: #keep looking for next datapoint until end of points if the next one isnt suitable
+                    continue
+                #WHAT IF THE DIAMETER OF THE NEXT DATAPOINT IS THE SAME, I.E. NO GROWTH?
+            except IndexError:
+                print("Index error!")
+                continue
     
-            
-    for i, dp in enumerate(data_sorted[:,1]): #every diameter
-        #add nearby times to list if time difference is <= 240mins
-        max_time_diff = 240/(60*24) #max time difference in days = 240mins
-        nearby_datapoints = [[x,y] for x, y in zip(data_sorted[:,0],data_sorted[:,1]) if abs(x-data_sorted[i,0]) <= max_time_diff]
-        nearby_datapoints = np.array(nearby_datapoints)
-        
-        #remove datapoints that were already added to the list 
-        #data_sorted = np.array([[z,x] for x,y,z in zip(data_sorted[:,1],nearby_datapoints[:,1],data_sorted[:,0]) if x != y])
-        if i == 10:
-            break
-        
-        print(i, nearby_datapoints)
-        #print(i, data_sorted)
+    print("data_pairs", data_pairs, "\n")
     
-    
-    #combine overlapping sub_data lists
+    #combine overlapping lists to create lists with nearby datapoints
+    combined = combine_connected_pairs(data_pairs)
+    print("COMBINED",combined)           
 
-    
-    #check time difference
-    
-    
-    #return gr_times, gr_diams
+    return combined
 
-#gr_times_mc, gr_diams_mc = find_dots(x_maxcon_days,xyz_maxcon[1]) #maximum concentration
-#gr_times_at, gr_diams_at = find_dots(x_appear_days,xyz_appear[1]) #maximum concentration
-
-find_dots(x_maxcon_days,xyz_maxcon[1])
+combined = find_dots(times= x_maxcon_days,diams= xyz_maxcon[1])
 
 
-def filter_dots():
+def filter_dots(datapoints):
     '''
     Filter datapoints of lines that are too short or
     with too big of an error.
     '''
+    
+    #check length of datapoints for each line
+    [subpoints for subpoints in datapoints if len(subpoints) >= 4] #length of at least 4 datapoints
+    
+    #check error of possible fitted linear curve
+    filtered_segments = []
+    for segment in combined_segments:
+        
+        data = df[abr + '_d'].loc[segment[0]:segment[1]]
+              
+        if len(data) >= 4 and not check_time_gaps(df.loc[segment[0]:segment[1]].index, 120): ### len(data)>=5 -> len(data)>=4
+                
+            curve, popt = fit_curve(data)
+            if curve is not None and popt is not None:
+                x_values = np.arange(len(data))
+                y_values = data.values
+                erros_absolutos = np.abs(curve(x_values, *popt) - y_values)
+                mape = np.mean(erros_absolutos / y_values) * 100
+
+                if mape <= 10:
+                    filtered_segments.append(segment)
+    
+filter_dots(combined)
+    
+'''
+def init_find():
+    find_dots()
+    filter_dots()
+    
+'''
 #################### PLOTTING ######################
-#def plot_GRs():
+def plot_GRs(x,y):
+    '''
+    x = time in days
+    y = diameters in nm
+    '''
+    
+    #flip due x and y, error in time
+    x = np.sort(y)  
+    y = np.sort(x)
+    
+    #linear least square fits
+    params, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
+    params2, pcov2 = curve_fit(linear, x, y) #linear x
+    gr = 1/(params2[0]*24) #unit to nm/h from time in days
+    y_fit = params[0]*np.log(x) + params[1]
+    x_UTC = np.array(days_into_UTC(y_fit,time_d,start_hour="00:00:00")) #change days into UTC
+
+    #plotting
+    plt.plot(x_UTC,x,lw=3) #line
+    
+    midpoint_idx = len(y_fit) // 2 #growth rate value
+    midpoint_time = x_UTC[midpoint_idx]
+    midpoint_value = x[midpoint_idx]
+    plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
     
 def plot_manual_GR(times,diams,time_range,diam_range):
     '''
