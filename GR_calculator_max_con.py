@@ -9,6 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
+from operator import itemgetter
 
 '''
 This code assumes dmps data.
@@ -156,6 +157,11 @@ def flatten_list(list):
     returns a flattened list. 
     '''
     return [x for xs in list for x in xs]
+def check_time_gap(times, max_diff_mins):
+    time_gaps = abs(times[0]-times[1])
+    max_diff_days = max_diff_mins/(60*24)
+    if time_gaps <= max_diff_days:
+        return times 
 
 #define mathematical functions for fitting
 def gaussian(x,a,x0,sigma): 
@@ -164,6 +170,8 @@ def logistic(x,L,x0,k):
     return L / (1 + np.exp(-k*(x-x0))) 
 def linear(x,k,b):
     return k*x + b
+def logarithmic(x):
+    return np.log(x)
 
 def cal_1st_derivative(dataframe,time_days):
     '''
@@ -475,6 +483,7 @@ def run_ranges():
     '''
     Goes through all ranges and calculates the points for maximum concentration
     and appearance time methods along with other useful information.
+    x = time, y = diameter, z = concentration
     '''
     maxcon_xyz = [] #maximum concentration
     maxcon_x = []
@@ -529,7 +538,86 @@ def run_ranges():
 
 xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv = run_ranges()
 
+def find_dots(times,diams):
+    '''
+    Takes times and diameters of wanted method to find nearby datapoints.
+    Fits linear curve to test if datapoints are close enough.
+    Returns lists with wanted times and diameters for plotting growth rates.
+    '''
+    datapoints = []
+    
+    #combine to the same list
+    [datapoints.append([time,diam]) for time, diam in zip(times,diams)]
+    
+    #sort data to order by diameter
+    data_sorted = np.array(sorted(datapoints, key=itemgetter(1)))
+    print(data_sorted)
+
+    max_time_diff = 240/(60*24) #max time difference in days = 240mins
+    #max_diam_diff = np.log(x+5) #logarithimic depencade, define a function that depends on diameter
+    for i, datapoint in enumerate(data_sorted):
+        sub_data = [] #list for data of one line
+        
+        try: #at the start there is no previous datapoint so we need this construct
+            next_datapoint = data_sorted[i+1]
+            time1 = next_datapoint[0]
+            time = datapoint[0]
+            diam1 = next_datapoint[1]
+            diam = datapoint[1]
+            time_diff = abs(time1-time)
+            diam_diff = abs(diam1-diam)
+            
+            nextnext_diam = df.columns.values[df.columns.values > diam][1] # 2 diameter points forward after current diameter
+            max_diam_diff = abs(diam-nextnext_diam) #max one diameter channel empty in between
+            
+            if time_diff <= max_time_diff and diam_diff <= max_diam_diff:    #check time and diameter difference
+                
+            else: #keep looking for next datapoint until end of points if the next one isnt suitable
+                nearby_datapoints = [[x,y] for x, y in zip(data_sorted[:,0],data_sorted[:,1]) if abs(x-data_sorted[i,0]) <= max_time_diff]
+                
+                      
+        except IndexError:
+            print("Index error!")
+            continue
+    
+            
+    for i, dp in enumerate(data_sorted[:,1]): #every diameter
+        #add nearby times to list if time difference is <= 240mins
+        max_time_diff = 240/(60*24) #max time difference in days = 240mins
+        nearby_datapoints = [[x,y] for x, y in zip(data_sorted[:,0],data_sorted[:,1]) if abs(x-data_sorted[i,0]) <= max_time_diff]
+        nearby_datapoints = np.array(nearby_datapoints)
+        
+        #remove datapoints that were already added to the list 
+        #data_sorted = np.array([[z,x] for x,y,z in zip(data_sorted[:,1],nearby_datapoints[:,1],data_sorted[:,0]) if x != y])
+        if i == 10:
+            break
+        
+        print(i, nearby_datapoints)
+        #print(i, data_sorted)
+    
+    
+    #combine overlapping sub_data lists
+
+    
+    #check time difference
+    
+    
+    #return gr_times, gr_diams
+
+#gr_times_mc, gr_diams_mc = find_dots(x_maxcon_days,xyz_maxcon[1]) #maximum concentration
+#gr_times_at, gr_diams_at = find_dots(x_appear_days,xyz_appear[1]) #maximum concentration
+
+find_dots(x_maxcon_days,xyz_maxcon[1])
+
+
+def filter_dots():
+    '''
+    Filter datapoints of lines that are too short or
+    with too big of an error.
+    '''
 #################### PLOTTING ######################
+#def plot_GRs():
+    
 def plot_manual_GR(times,diams,time_range,diam_range):
     '''
     Plots growth rates from chosen range of either method's dots. 
@@ -545,14 +633,11 @@ def plot_manual_GR(times,diams,time_range,diam_range):
         days_from_start = (i - start_of_day) / timedelta(days=1)
         time_range_days.append(time_d[0] + days_from_start)
 
-    time_range_days1 = time_range_days[0]
-    time_range_days2 = time_range_days[1]
-    
     #choose wanted dots
     sub_times = []
     sub_diams = []
     for time,diam in zip(times,diams):
-        if time >= time_range_days1 and time <= time_range_days2 and diam >= diam_range[0] and diam <= diam_range[1]:
+        if time >= time_range_days[0] and time <= time_range_days[1] and diam >= diam_range[0] and diam <= diam_range[1]:
             sub_times = np.append(sub_times,time)
             sub_diams = np.append(sub_diams,diam)
 
@@ -597,8 +682,8 @@ def plot_PSD(dataframe):
         legend_handle.set_markeredgecolor("black")
     
     #growth rates
-    plot_manual_GR(x_maxcon_days,xyz_maxcon[1],["2016-06-12 10:30:00","2016-06-12 12:30:00"],[9,25]) #maximum concentration
-    plot_manual_GR(x_appear_days,xyz_appear[1],["2016-06-12 08:00:00","2016-06-12 12:00:00"],[5.5,30]) #appearance time
+    #plot_manual_GR(x_maxcon_days,xyz_maxcon[1],["2016-06-12 10:30:00","2016-06-12 12:30:00"],[9,25]) #maximum concentration
+    #plot_manual_GR(x_appear_days,xyz_appear[1],["2016-06-12 08:00:00","2016-06-12 12:00:00"],[5.5,30]) #appearance time
 
     plt.xlim(dataframe.index[0],dataframe.index[-1])
     plt.ylim(dataframe.columns[0],dataframe.columns[-1])
@@ -904,5 +989,5 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     fig.tight_layout()
 #plot_channel(df,[df.columns[7],df.columns[13],df.columns[14]],choose_GR=None,draw_range_edges=True)
 
-plt.show()
+#plt.show()
 ####################################################
