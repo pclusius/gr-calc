@@ -187,7 +187,7 @@ def combine_connected_pairs(list):
             combined_lists.append(component)
     
     # Convert back to numpy arrays if needed
-    return [[np.array(point) for point in component] for component in combined_lists]
+    return [[point for point in component] for component in combined_lists]
 
 #define mathematical functions for fitting
 def gaussian(x,a,x0,sigma): 
@@ -564,6 +564,8 @@ def run_ranges():
 
 xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv = run_ranges()
 
+#################### GR DATA ######################
+
 def find_dots(times,diams):
     '''
     Takes times and diameters of wanted method to find nearby datapoints.
@@ -621,10 +623,6 @@ def find_dots(times,diams):
     print("COMBINED",combined)           
 
     return combined
-
-combined = find_dots(times= x_maxcon_days,diams= xyz_maxcon[1])
-
-
 def filter_dots(datapoints):
     '''
     Filter datapoints of lines that are too short or
@@ -632,45 +630,60 @@ def filter_dots(datapoints):
     '''
     
     #check length of datapoints for each line
-    [subpoints for subpoints in datapoints if len(subpoints) >= 4] #length of at least 4 datapoints
+    datapoints = [subpoints for subpoints in datapoints if len(subpoints) >= 4] #length of at least 4 datapoints
     
     #check error of possible fitted linear curve
-    filtered_segments = []
-    for segment in combined_segments:
+    filtered_datapoints = []
+    for data in datapoints:
+        x = np.arange(len(data))
+        y = [time[0] for time in data] #time as y
         
-        data = df[abr + '_d'].loc[segment[0]:segment[1]]
-              
-        if len(data) >= 4 and not check_time_gaps(df.loc[segment[0]:segment[1]].index, 120): ### len(data)>=5 -> len(data)>=4
-                
-            curve, popt = fit_curve(data)
-            if curve is not None and popt is not None:
-                x_values = np.arange(len(data))
-                y_values = data.values
-                erros_absolutos = np.abs(curve(x_values, *popt) - y_values)
-                mape = np.mean(erros_absolutos / y_values) * 100
+        i = 2
+        while True:
+            try:
+                popt, pcov = curve_fit(linear, x, y)
+                erros_absolutos = np.abs(linear(x, *popt) - y)
+                mape = np.mean(erros_absolutos / y) * 100
 
-                if mape <= 10:
-                    filtered_segments.append(segment)
-    
-filter_dots(combined)
-    
-'''
+                if mape <= 10: #maximum error 10%
+                    filtered_datapoints.append(data)
+                    break
+                else:
+                    data = data[:-i] #exclude last elements
+                    i += 1
+                    pass
+                MORE CONDITIONS HERE
+                    
+            except:
+                print("Linear fit diverges.")
+
+    return filtered_datapoints  
 def init_find():
-    find_dots()
-    filter_dots()
     
-'''
+    #find consequtive datapoints
+    mc_data = find_dots(times= x_maxcon_days,diams= xyz_maxcon[1]) #maximum concentration
+    at_data = find_dots(times= x_appear_days,diams= xyz_appear[1]) #appearance time
+    
+    #filter series of datapoints that are too short or with high deviation
+    mc_filtered = filter_dots(mc_data)
+    at_filtered = filter_dots(at_data)
+    
+    #extract times and diameters
+    time_mc = [[time[0] for time in mc_segment] for mc_segment in mc_filtered]
+    diam_mc = [[diam[1] for diam in mc_segment] for mc_segment in mc_filtered]
+    time_at = [[time[0] for time in at_segment] for at_segment in at_filtered]
+    diam_at = [[diam[1] for diam in at_segment] for at_segment in at_filtered]
+    
+    return time_mc, diam_mc, time_at, diam_at
+    
 #################### PLOTTING ######################
-def plot_GRs(x,y):
+
+def plot_GRs(y,x):
     '''
-    x = time in days
-    y = diameters in nm
+    y = time in days
+    x = diameters in nm
+    Flipped as the error is in time.
     '''
-    
-    #flip due x and y, error in time
-    x = np.sort(y)  
-    y = np.sort(x)
-    
     #linear least square fits
     params, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
     params2, pcov2 = curve_fit(linear, x, y) #linear x
@@ -685,15 +698,16 @@ def plot_GRs(x,y):
     midpoint_time = x_UTC[midpoint_idx]
     midpoint_value = x[midpoint_idx]
     plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
-    
 def plot_manual_GR(times,diams,time_range,diam_range):
     '''
     Plots growth rates from chosen range of either method's dots. 
     Takes in the x and y values of determined maximum concentrations / appearance times and their wanted range.
     time_range = [time1,time2]
     diam_range = [diam1,diam2]
+    #plot_manual_GR(x_maxcon_days,xyz_maxcon[1],["2016-06-12 10:30:00","2016-06-12 12:30:00"],[9,25]) #maximum concentration
+    #plot_manual_GR(x_appear_days,xyz_appear[1],["2016-06-12 08:00:00","2016-06-12 12:00:00"],[5.5,30]) #appearance time
     '''
-    #change strings to datetime
+    #change strings to days from start of measurement
     time_range_days = []
     for i in time_range:
         i = datetime.strptime(i, "%Y-%m-%d %H:%M:%S")
@@ -741,18 +755,22 @@ def plot_PSD(dataframe):
             plt.axvline(x=i, color='black', linestyle='-', lw=1)
         new_day = day
 
-    plt.plot(xyz_maxcon[0], xyz_maxcon[1], '*', alpha=0.5, color='white', ms=5,label='maximum concentration') #using mode fitting 
-    plt.plot(xyz_appear[0], xyz_appear[1], '*', alpha=0.5, color='green', ms=5,label='appearance time') #using mode fitting 
+    #dots
+    plt.plot(xyz_maxcon[0], xyz_maxcon[1], '*', alpha=0.5, color='white', ms=5,label='maximum concentration') 
+    plt.plot(xyz_appear[0], xyz_appear[1], '*', alpha=0.5, color='green', ms=5,label='appearance time')
     
+    #growth rates
+    time_mc, diam_mc, time_at, diam_at = init_find()
+    for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
+        plot_GRs(time_seg_mc, diam_seg_mc) #maximum concentration
+        plot_GRs(time_seg_at, diam_seg_at) #appearance time
+
+    #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
     for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
         legend_handle.set_markeredgewidth(0.5)
         legend_handle.set_markeredgecolor("black")
     
-    #growth rates
-    #plot_manual_GR(x_maxcon_days,xyz_maxcon[1],["2016-06-12 10:30:00","2016-06-12 12:30:00"],[9,25]) #maximum concentration
-    #plot_manual_GR(x_appear_days,xyz_appear[1],["2016-06-12 08:00:00","2016-06-12 12:00:00"],[5.5,30]) #appearance time
-
     plt.xlim(dataframe.index[0],dataframe.index[-1])
     plt.ylim(dataframe.columns[0],dataframe.columns[-1])
     plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
@@ -1057,5 +1075,6 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     fig.tight_layout()
 #plot_channel(df,[df.columns[7],df.columns[13],df.columns[14]],choose_GR=None,draw_range_edges=True)
 
-#plt.show()
+plt.show()
+
 ####################################################
