@@ -68,7 +68,9 @@ def input_data():
 file_names, modefit_names = input_data()
 """
 file_names = ["dm160612.sum"]
+#file_names = ["dm160410.sum","dm160411.sum","dm160412.sum"]
 modefit_names = ["output_modefit_2016_06_12.csv"]
+#modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv","output_modefit_2016_04_12.csv"]
 
 ###modified from Janne's code "NpfEventAnalyzer.py":
 ### load data for n days: ###
@@ -142,10 +144,10 @@ def avg_filter(dataframe,resolution):
     Returns smoothened dataframe and new time in days for that dataframe.
     '''
 
-    dataframe.index = dataframe.index.round('10T') #change timestamps to be exactly 10min intervals
+    dataframe.index = dataframe.index.round('10min') #change timestamps to be exactly 10min intervals
 
     #if average is taken of less than 3 datapoints, neglect that datapoint
-    full_time_range = pd.date_range(start=dataframe.index.min(), end=dataframe.index.max(), freq='10T')
+    full_time_range = pd.date_range(start=dataframe.index.min(), end=dataframe.index.max(), freq='10min')
     missing_timestamps = full_time_range.difference(dataframe.index) #missing timestamps
     blocks = pd.date_range(start=dataframe.index.min(), end=dataframe.index.max(), freq=f'{resolution}min') #blocks of resolution
     

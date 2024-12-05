@@ -11,6 +11,7 @@ matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
 from operator import itemgetter
 from collections import defaultdict
+import statsmodels.api as sm
 
 '''
 This code assumes dmps data.
@@ -221,6 +222,7 @@ def find_modes(dataframe,df_deriv,threshold_deriv):
     and the wanted derivative threshold.
     Returns dataframe with found modes.
     '''
+    #tsekkaa miksi ei piirry suunnillee 30nm kohdalle maxconc eikä appear
 
     df_modes = pd.DataFrame(np.nan, index=dataframe.index, columns=dataframe.columns) 
 
@@ -285,6 +287,8 @@ def find_ranges():
     Finds ranges around growth rates from previously calculated mode fitting data.
     Returns a list of dataframes with the wanted ranges and their growth rates.
     '''
+    
+    #pidennä ikkunaa kun loivempi??
     df_GR_values = pd.DataFrame(pd.read_csv("./Gr_final.csv",sep=',',engine='python')) #open calculated values in Gabi's code
     threshold = 0 #GR [nm/h]
 
@@ -652,7 +656,8 @@ def filter_dots(datapoints):
                     data = data[:-i] #exclude last elements
                     i += 1
                     pass
-                MORE CONDITIONS HERE
+                #MORE CONDITIONS HERE
+                #robust fit
                     
             except:
                 print("Linear fit diverges.")
@@ -677,6 +682,24 @@ def init_find():
     return time_mc, diam_mc, time_at, diam_at
     
 #################### PLOTTING ######################
+
+def robust_fit(y,x):
+    
+    res2 = sm.OLS(y, x).fit()
+    resrlm2 = sm.RLM(y, x).fit()
+    
+    pred_ols = res2.get_prediction()
+    iv_l = pred_ols.summary_frame()["obs_ci_lower"]
+    iv_u = pred_ols.summary_frame()["obs_ci_upper"]
+
+    #fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(x, y, "o", label="data")
+    #ax.plot(x1, y_true2, "b-", label="True")
+    ax.plot(x, res2.fittedvalues, "r-", label="OLS")
+    ax.plot(x, iv_u, "r--")
+    ax.plot(x, iv_l, "r--")
+    ax.plot(x, resrlm2.fittedvalues, "g.-", label="RLM")
+    #legend = ax.legend(loc="best")
 
 def plot_GRs(y,x):
     '''
@@ -763,13 +786,14 @@ def plot_PSD(dataframe):
     time_mc, diam_mc, time_at, diam_at = init_find()
     for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
         plot_GRs(time_seg_mc, diam_seg_mc) #maximum concentration
-        plot_GRs(time_seg_at, diam_seg_at) #appearance time
+        #plot_GRs(time_seg_at, diam_seg_at) #appearance time
+        robust_fit(time_seg_at, diam_seg_at)
 
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
-    for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
-        legend_handle.set_markeredgewidth(0.5)
-        legend_handle.set_markeredgecolor("black")
+    #for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
+    #    legend_handle.set_markeredgewidth(0.5)
+    #    legend_handle.set_markeredgecolor("black")
     
     plt.xlim(dataframe.index[0],dataframe.index[-1])
     plt.ylim(dataframe.columns[0],dataframe.columns[-1])
@@ -784,7 +808,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     ax[n,0] = n amount of channels                      ax[n,1] = derivative of concentrations
                                                 ...
     Inputs dataframe with data and diameters (numerical).
-    choose_
+    choose_GR = None or write wanted GR around which the info will be plotted
     range_edges = True, draws the edges of ranges around growth rates
     Assumes chosen channel has modes that have been found with the maximum concentration method!!!
     '''   
@@ -1073,7 +1097,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         green_star.set_markeredgecolor("black")
     
     fig.tight_layout()
-#plot_channel(df,[df.columns[7],df.columns[13],df.columns[14]],choose_GR=None,draw_range_edges=True)
+#plot_channel(df,[df.columns[15],df.columns[16]],choose_GR=1.1,draw_range_edges=True)
 
 plt.show()
 
