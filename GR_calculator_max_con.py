@@ -11,7 +11,9 @@ matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
 from operator import itemgetter
 from collections import defaultdict
-import statsmodels.api as sm
+#import statsmodels.api as sm
+from sklearn import linear_model
+from itertools import cycle
 
 '''
 This code assumes dmps data.
@@ -568,6 +570,73 @@ def run_ranges():
 
 xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv = run_ranges()
 
+
+print('xyz_maxcon before',xyz_maxcon)
+print(len(xyz_maxcon[0]),len(xyz_maxcon[1]),len(xyz_maxcon[2]))
+print(len(x_maxcon_days))
+def filter_duplicates(list,time_days):
+    
+    #filter points that are basically the same but found with a different range
+    # to avoid many points in the same time/diam, take an average and set that as the new timestamp
+    for i, diam in enumerate(df.columns.values): #loop through diameter values     
+        channel = [[list[0][j],list[1][j],list[2][j]] for j, d in enumerate(list[1]) if d == diam] #choose points that are in diam channel
+
+        if len(channel) > 1: #if there are several points in one channel, check time difference
+            max_time_diff = 30/(60*24) #30min
+            
+            for elem in channel: #loop through points in diam channel
+                time = elem[0]
+                same_times = [point[0] for point in channel if abs(point[0]-time) < timedelta(days=max_time_diff)] #list of times close to current time
+
+                #REMOVE DUPLICATES
+                x, y, z = list
+                t_d = time_days.copy()
+
+                #identify indices of elements to remove
+                mask_x = np.isin(x, same_times)
+                
+                if not any(mask_x): #if there are no True values in 'mask_x' 
+                    continue #go to next iteration
+                    
+                #extract removed elements for averaging
+                removed_times = x[mask_x]
+                removed_z_values = z[mask_x]
+                removed_time_days = time_days[mask_x]
+                
+                #remove the identified elements
+                x = x[~mask_x]
+                y = y[~mask_x]
+                z = z[~mask_x]
+                t_d = t_d[~mask_x]
+                
+                #calculate averages of removed elements
+                #average_time = np.mean(removed_times).astype("datetime64[ms]")
+                average_time = pd.to_datetime(pd.Series(removed_times)).mean().to_pydatetime()
+                average_conc = np.mean(removed_z_values)
+                average_time_days = np.mean(removed_time_days)
+
+                #add the averages to the remaining data
+                times = np.append(x, average_time)
+                diams = np.append(y, diam)
+                concs = np.append(z, average_conc)
+                time_days_list = np.append(t_d,average_time_days)
+                
+                #update xyz and time_days
+                list = [times, diams, concs]
+                time_days = time_days_list
+
+    return list, time_days
+
+xyz_maxcon, x_maxcon_days = filter_duplicates(xyz_maxcon,x_maxcon_days)
+xyz_appear, x_appear_days = filter_duplicates(xyz_appear,x_appear_days)
+
+#define time in days again as some of the got filtered
+#x_maxcon_days = [x.total_seconds() / (24*60*60) for x in xyz_maxcon[0]]
+print('xyz_maxcon after',xyz_maxcon)
+print(len(xyz_maxcon[0]),len(xyz_maxcon[1]),len(xyz_maxcon[2]))
+print(len(x_maxcon_days))
+
+
 #################### GR DATA ######################
 
 def find_dots(times,diams):
@@ -584,7 +653,6 @@ def find_dots(times,diams):
     
     #sort data to order by diameter
     data_sorted = np.array(sorted(datapoints, key=itemgetter(1)))
-    #print("datasorted",data_sorted)
 
     max_time_diff = 90/(60*24) #max time difference in days = 90mins = 1,5h
 
@@ -594,7 +662,6 @@ def find_dots(times,diams):
         
         #find pairs of nearby datapoints and add them to data_pairs
         for ii in range(1,len(datapoints)-i): #check for next datapoint in data_sorted list with required time and diam difference
-            ''' in the last datapoint, range becomes and empty list and there should be an IndexError?'''
             try: #in case we reach the end with no "next datapoint"
                 next_datapoint = data_sorted[i+ii]
                 time1 = next_datapoint[0]
@@ -620,12 +687,8 @@ def find_dots(times,diams):
                 print("Index error!")
                 continue
     
-    print("data_pairs", data_pairs, "\n")
-    
     #combine overlapping lists to create lists with nearby datapoints
-    combined = combine_connected_pairs(data_pairs)
-    print("COMBINED",combined)           
-
+    combined = combine_connected_pairs(data_pairs)          
     return combined
 def filter_dots(datapoints):
     '''
@@ -636,26 +699,39 @@ def filter_dots(datapoints):
     #check length of datapoints for each line
     datapoints = [subpoints for subpoints in datapoints if len(subpoints) >= 4] #length of at least 4 datapoints
     
+    print(datapoints)
     #check error of possible fitted linear curve
     filtered_datapoints = []
-    for data in datapoints:
-        x = np.arange(len(data))
-        y = [time[0] for time in data] #time as y
+    for line in datapoints:
+        print("data",line)
+        i = 1
         
-        i = 2
+        removed_points = []
         while True:
             try:
+                x = np.arange(len(line))
+                y = [time[0] for time in line] #time as y
+                y = y - time_d[0]
+                
                 popt, pcov = curve_fit(linear, x, y)
-                erros_absolutos = np.abs(linear(x, *popt) - y)
-                mape = np.mean(erros_absolutos / y) * 100
+                absolute_error = np.abs(linear(x, *popt) - y)
+                print('absolute_error',absolute_error)
+                print("y",y)
+                mape = np.mean(absolute_error / y) * 100
+                print('mape',mape)
 
-                if mape <= 10: #maximum error 10%
-                    filtered_datapoints.append(data)
+                if mape <= 20: #maximum error 4%
+                    filtered_datapoints.append(line)
+                    #filtered_datapoints.append(removed_points)
                     break
                 else:
-                    data = data[:-i] #exclude last elements
+                    line = line[:-i] #exclude last elements one by one
                     i += 1
-                    pass
+                    #print("deleted",line[-1])
+                    #removed_points.append(line[-1])    #add removed datapoint to another list
+                    
+                
+                
                 #MORE CONDITIONS HERE
                 #robust fit
                     
@@ -683,43 +759,66 @@ def init_find():
     
 #################### PLOTTING ######################
 
-def robust_fit(y,x):
+def robust_fit(time,diam):
+    # Fit line using all data
+    #diam = np.array(diam).reshape(-1,1)
     
-    res2 = sm.OLS(y, x).fit()
-    resrlm2 = sm.RLM(y, x).fit()
+    #do fit to linear data
+    diam_linear = np.linspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
+    time = np.array(time).reshape(-1,1)
+    lr = linear_model.LinearRegression().fit(diam_linear, time) #x,y
+
+    #robust fit
+    ransac = linear_model.RANSACRegressor().fit(diam_linear, time)
+    gr = 1/(ransac.estimator_.coef_[0][0]*24) #unit to nm/h from time in days
     
-    pred_ols = res2.get_prediction()
-    iv_l = pred_ols.summary_frame()["obs_ci_lower"]
-    iv_u = pred_ols.summary_frame()["obs_ci_upper"]
+    #predict data of estimated models
+    diam_log = np.geomspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
+    #line_X = np.linspace(diam.min(), diam.max(),num=len(time))[:, np.newaxis]
+    line_y = lr.predict(diam_linear)
+    line_y_ransac = ransac.predict(diam_linear)
+    
+    #change times to UTC
+    time_fit = list(line_y.reshape(-1))
+    time_UTC = np.array(days_into_UTC(time_fit,time_d,start_hour="00:00:00")) #change days into UTC
+    time_fit_ransac = list(line_y_ransac.reshape(-1))
+    time_UTC_ransac = np.array(days_into_UTC(time_fit_ransac,time_d,start_hour="00:00:00")) #change days into UTC
 
-    #fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(x, y, "o", label="data")
-    #ax.plot(x1, y_true2, "b-", label="True")
-    ax.plot(x, res2.fittedvalues, "r-", label="OLS")
-    ax.plot(x, iv_u, "r--")
-    ax.plot(x, iv_l, "r--")
-    ax.plot(x, resrlm2.fittedvalues, "g.-", label="RLM")
-    #legend = ax.legend(loc="best")
-
-def plot_GRs(y,x):
+    # Compare estimated coefficients
+    #print("Estimated coefficients (true, linear regression, RANSAC):")
+    #print(lr.coef_, ransac.estimator_.coef_)
+    #print(lr.predict)
+    
+    lw = 2
+    #plt.plot(time_UTC, diam_linear, color="navy", linewidth=lw, label="Linear regressor")
+    #plt.plot(time_UTC_ransac,diam_linear,color="cornflowerblue",linewidth=lw,label="RANSAC regressor")
+    plt.plot(time_UTC, diam_log, color="navy", linewidth=lw, label="Linear regressor")
+    plt.plot(time_UTC_ransac,diam_log,color="red",linewidth=lw,label="RANSAC regressor")
+    
+    midpoint_idx = len(time_fit) // 2 #growth rate value
+    midpoint_time = time_UTC[midpoint_idx]
+    midpoint_value = diam[midpoint_idx]
+    plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
+    
+def plot_GRs(time,diam):
     '''
     y = time in days
     x = diameters in nm
     Flipped as the error is in time.
     '''
     #linear least square fits
-    params, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
-    params2, pcov2 = curve_fit(linear, x, y) #linear x
+    params, pcov = curve_fit(linear, np.log(diam), time) #logarthmic diam
+    params2, pcov2 = curve_fit(linear, diam, time) #linear diam
     gr = 1/(params2[0]*24) #unit to nm/h from time in days
-    y_fit = params[0]*np.log(x) + params[1]
-    x_UTC = np.array(days_into_UTC(y_fit,time_d,start_hour="00:00:00")) #change days into UTC
+    time_fit = params[0]*np.log(diam) + params[1]
+    time_UTC = np.array(days_into_UTC(time_fit,time_d,start_hour="00:00:00")) #change days into UTC
 
     #plotting
-    plt.plot(x_UTC,x,lw=3) #line
+    plt.plot(time_UTC,diam,lw=3) #line
     
-    midpoint_idx = len(y_fit) // 2 #growth rate value
-    midpoint_time = x_UTC[midpoint_idx]
-    midpoint_value = x[midpoint_idx]
+    midpoint_idx = len(time_fit) // 2 #growth rate value
+    midpoint_time = time_UTC[midpoint_idx]
+    midpoint_value = diam[midpoint_idx]
     plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
 def plot_manual_GR(times,diams,time_range,diam_range):
     '''
@@ -777,7 +876,7 @@ def plot_PSD(dataframe):
         if day != new_day:
             plt.axvline(x=i, color='black', linestyle='-', lw=1)
         new_day = day
-
+    #fig, ax1 = plt.subplots(figsize=(9, 4.7))
     #dots
     plt.plot(xyz_maxcon[0], xyz_maxcon[1], '*', alpha=0.5, color='white', ms=5,label='maximum concentration') 
     plt.plot(xyz_appear[0], xyz_appear[1], '*', alpha=0.5, color='green', ms=5,label='appearance time')
@@ -786,8 +885,8 @@ def plot_PSD(dataframe):
     time_mc, diam_mc, time_at, diam_at = init_find()
     for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
         plot_GRs(time_seg_mc, diam_seg_mc) #maximum concentration
-        #plot_GRs(time_seg_at, diam_seg_at) #appearance time
-        robust_fit(time_seg_at, diam_seg_at)
+        plot_GRs(time_seg_at, diam_seg_at) #appearance time
+        #robust_fit(time_seg_at, diam_seg_at)
 
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
@@ -1081,7 +1180,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     
     #common legends
     #ax1[0,0].legend([line1,line2,line3,line4,line5],["mode edges","gaussian fit","logistic fit","maximum concentration","appearance time"],fancybox=False,framealpha=0.9,loc='upper center', bbox_to_anchor=(0.85, 1.8), fontsize=8)
-    ax1[0,0].legend([line2,line3,line4,line5,line7],["gaussian fit","logistic fit","maximum concentration","appearance time","mode edges"],fancybox=False,framealpha=0.9, fontsize=4).set_zorder(10)
+    ax1[0,0].legend([line2,line3,line4,line5,line7],["gaussian fit","logistic fit","maximum concentration","appearance time","mode edges"],fancybox=False,framealpha=0.9, fontsize=4, loc="best")
     if draw_range_edges == True:
         ax1[0,1].legend([line4,line5,line7,line8,line6],["maximum concentration","appearance time","mode edges","range",f"threshold = {str(threshold_deriv)}"],fancybox=False,framealpha=0.9, loc='upper right', fontsize=4)
     else:
