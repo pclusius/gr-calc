@@ -69,8 +69,12 @@ file_names, modefit_names = input_data()
 """
 file_names = ["dm160612.sum"]
 #file_names = ["dm160410.sum","dm160411.sum","dm160412.sum"]
+#file_names = ["dm160410.sum","dm160411.sum"]
+#file_names = ["dm160426.sum","dm160427.sum","dm160428.sum"]
 modefit_names = ["output_modefit_2016_06_12.csv"]
 #modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv","output_modefit_2016_04_12.csv"]
+#modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv"]
+#modefit_names = ["output_modefit_2016_04_26.csv","output_modefit_2016_04_27.csv","output_modefit_2016_04_28.csv"]
 
 ###modified from Janne's code "NpfEventAnalyzer.py":
 ### load data for n days: ###
@@ -358,6 +362,47 @@ def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 
             start = end 
         
     return combined_segments
+
+###################################################
+
+### ADDED NEW WAY TO COMBINE SEGMENTS
+def combine_segments_ver2(df, abr, segments, mape_threshold=5):
+    combined_segments = []
+    start = 0
+
+    while start < len(segments):
+        end = start + 1
+        while end < len(segments): ### goes through adding the following black point and checks that is 30mins time difference from the last point, if so it will check error also, keeps extending the GR size
+            if end >= len(segments):
+                break
+            
+            comb_segs_data = df[abr + '_d'].loc[segments[start]:segments[end]]
+            time_difference = segments[end] - segments[end - 1]
+            if time_difference != timedelta(minutes=30): ### timedelta(minutes=5) -> timedelta(minutes=30)
+                break
+            
+            x_comb = np.arange(len(comb_segs_data))
+            y_comb = comb_segs_data.values
+            #print(comb_segs_data)
+            curve, popt = fit_curve(comb_segs_data)
+            y_fit = curve(x_comb, *popt)
+            erros_absolutos = np.abs(y_fit - y_comb)
+            mape = np.mean(erros_absolutos / y_comb) * 100
+            
+            if mape > mape_threshold:
+                break
+                       
+            end += 1
+              
+        if len (comb_segs_data) == 3 and mape > mape_threshold:
+            start = end - 1
+        else:           
+            combined_segments.append((segments[start], segments[min(end-1, len(segments)-1)]))
+            start = end 
+        
+
+    return combined_segments
+###
 
 ###################################################
 

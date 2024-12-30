@@ -11,7 +11,7 @@ matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
 from operator import itemgetter
 from collections import defaultdict
-#import statsmodels.api as sm
+import statsmodels.api as sm
 from sklearn import linear_model
 from itertools import cycle
 
@@ -50,21 +50,21 @@ def combine_data():
     
     combined_data = pd.concat(dfs,axis=0,ignore_index=True) #combine dataframes
     return combined_data
-def days_into_UTC(data,time_days,start_hour):
+def days_into_UTC(data):
     '''
     Changes time from days to UTC.
-    Takes in data (df, list or one date), time_days (time in days), start_hour (has to do with resolution)
+    Takes in data which can be a df, list or just one date.
     Returns the times in UTC.
     '''
     try:
-        time_steps = data["time (d)"] - time_days[0] #calculate timesteps between every timestamp
-        start_date_str = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} {start_hour}" #define start date
+        time_steps = data["time (d)"] - time_d[0] #calculate timesteps between every timestamp
+        start_date_str = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00" #define start date
         start_datetime = datetime.strptime(start_date_str, "%Y-%m-%d %H:%M:%S") #change to date time
         data["time (d)"] = [start_datetime + timedelta(days=i) for i in time_steps] #converting timesteps to datetime
         return data
     except:
-        time_steps = data - time_days[0]
-        start_date_str = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} {start_hour}"
+        time_steps = data - time_d[0]
+        start_date_str = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00"
         start_datetime = datetime.strptime(start_date_str, "%Y-%m-%d %H:%M:%S")
         try: #converting timesteps to datetime
             data = [start_datetime + timedelta(days=i) for i in time_steps] 
@@ -119,7 +119,7 @@ df = combine_data()
 df.rename(columns=dict(zip(df.columns[[0,1]], ["time (d)", "total number concentration (N)"])), inplace=True) #rename first two columns
 df = df.drop(['total number concentration (N)'], axis=1) #drop total N concentrations from the dataframe as they're not needed
 time_d = df['time (d)'].values.astype(float) #save time as days before changing them to UTC
-df = days_into_UTC(df,time_d,start_hour="00:00:00")
+df = days_into_UTC(df)
 
 #set new UTC timestamps as indices
 df.rename(columns={'time (d)': 'time (UTC)'}, inplace=True)
@@ -391,8 +391,8 @@ def maximum_concentration(dataframe):
                         start_time_days = x[0] + np.min(time_d_range) #define start/end time (days)
                         end_time_days = x[-1] + np.min(time_d_range)
                         
-                        start_time_UTC = pd.Series(days_into_UTC(start_time_days-0.25/24,time_d_res,start_hour="00:15:00")).dt.round('30min')[0] #UTC, rounded to the nearest 30min increment
-                        end_time_UTC = pd.Series(days_into_UTC(end_time_days-0.25/24,time_d_res,start_hour="00:15:00")).dt.round('30min')[0]
+                        start_time_UTC = pd.Series(days_into_UTC(start_time_days-0.25/24)).dt.round('30min')[0] #UTC, rounded to the nearest 30min increment
+                        end_time_UTC = pd.Series(days_into_UTC(end_time_days-0.25/24)).dt.round('30min')[0]
                         start_time_UTC += timedelta(minutes=15) #makes it easier to round
                         end_time_UTC += timedelta(minutes=15)
                         
@@ -416,7 +416,7 @@ def maximum_concentration(dataframe):
                 y = [] 
 
     maxcon_x_days = max_conc_time #save maximum concentration time in days as well
-    max_conc_time = np.array(days_into_UTC(max_conc_time,time_d_res,start_hour="00:15:00")) #change days to UTC in the list of max concentration times
+    max_conc_time = np.array(days_into_UTC(max_conc_time)) #change days to UTC in the list of max concentration times
 
     return max_conc_time, max_conc_diameter, max_conc, maxcon_x_days, fitting_params, dfs_mode_start, dfs_mode_end, threshold_deriv
 def appearance_time(dataframe):
@@ -508,7 +508,7 @@ def appearance_time(dataframe):
                 y = []
 
     appear_x_days = appear_time #save appearance time in days as well
-    appear_time = np.array(days_into_UTC(appear_time,time_d_res,start_hour="00:15:00")) #change days to UTC in the list of max concentration times
+    appear_time = np.array(days_into_UTC(appear_time)) #change days to UTC in the list of max concentration times
 
     return appear_time, appear_diameter, mid_conc, appear_x_days, fitting_params
 def run_ranges():
@@ -571,10 +571,8 @@ def run_ranges():
 xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv = run_ranges()
 
 
-print('xyz_maxcon before',xyz_maxcon)
-print(len(xyz_maxcon[0]),len(xyz_maxcon[1]),len(xyz_maxcon[2]))
-print(len(x_maxcon_days))
 def filter_duplicates(list,time_days):
+    #TAKING A MEAN IS INACCURATE
     
     #filter points that are basically the same but found with a different range
     # to avoid many points in the same time/diam, take an average and set that as the new timestamp
@@ -627,14 +625,8 @@ def filter_duplicates(list,time_days):
 
     return list, time_days
 
-xyz_maxcon, x_maxcon_days = filter_duplicates(xyz_maxcon,x_maxcon_days)
-xyz_appear, x_appear_days = filter_duplicates(xyz_appear,x_appear_days)
-
-#define time in days again as some of the got filtered
-#x_maxcon_days = [x.total_seconds() / (24*60*60) for x in xyz_maxcon[0]]
-print('xyz_maxcon after',xyz_maxcon)
-print(len(xyz_maxcon[0]),len(xyz_maxcon[1]),len(xyz_maxcon[2]))
-print(len(x_maxcon_days))
+#xyz_maxcon, x_maxcon_days = filter_duplicates(xyz_maxcon,x_maxcon_days)
+#xyz_appear, x_appear_days = filter_duplicates(xyz_appear,x_appear_days)
 
 
 #################### GR DATA ######################
@@ -709,7 +701,7 @@ def filter_dots(datapoints):
         removed_points = []
         while True:
             try:
-                x = np.arange(len(line))
+                x = np.arange(len(line)) #diams
                 y = [time[0] for time in line] #time as y
                 y = y - time_d[0]
                 
@@ -750,39 +742,41 @@ def init_find():
     at_filtered = filter_dots(at_data)
     
     #extract times and diameters
-    time_mc = [[time[0] for time in mc_segment] for mc_segment in mc_filtered]
-    diam_mc = [[diam[1] for diam in mc_segment] for mc_segment in mc_filtered]
-    time_at = [[time[0] for time in at_segment] for at_segment in at_filtered]
-    diam_at = [[diam[1] for diam in at_segment] for at_segment in at_filtered]
+    time_mc = [[seg[0] for seg in mc_segment] for mc_segment in mc_filtered]
+    diam_mc = [[seg[1] for seg in mc_segment] for mc_segment in mc_filtered]
+    time_at = [[seg[0] for seg in at_segment] for at_segment in at_filtered]
+    diam_at = [[seg[1] for seg in at_segment] for at_segment in at_filtered]
     
     return time_mc, diam_mc, time_at, diam_at
     
 #################### PLOTTING ######################
 
 def robust_fit(time,diam):
-    # Fit line using all data
-    #diam = np.array(diam).reshape(-1,1)
-    
     #do fit to linear data
+    #diam_log = np.geomspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
     diam_linear = np.linspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
     time = np.array(time).reshape(-1,1)
-    lr = linear_model.LinearRegression().fit(diam_linear, time) #x,y
+    diam = np.array(diam).reshape(-1,1)
+    
+    #linear fit for comparison
+    #lr = linear_model.LinearRegression().fit(diam, time) #x,y
 
     #robust fit
-    ransac = linear_model.RANSACRegressor().fit(diam_linear, time)
-    gr = 1/(ransac.estimator_.coef_[0][0]*24) #unit to nm/h from time in days
+    ransac = linear_model.RANSACRegressor().fit(diam, time)
+    rlm = sm.RLM(time, sm.add_constant(diam), M=sm.robust.norms.HuberT()).fit() #statsmodel robust linear model
     
     #predict data of estimated models
-    diam_log = np.geomspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
-    #line_X = np.linspace(diam.min(), diam.max(),num=len(time))[:, np.newaxis]
-    line_y = lr.predict(diam_linear)
-    line_y_ransac = ransac.predict(diam_linear)
-    
+    #t_linear = lr.predict(diam_linear)
+    t_ransac = ransac.predict(diam_linear)
+    t_rlm = rlm.predict(sm.add_constant(diam_linear))
+
     #change times to UTC
-    time_fit = list(line_y.reshape(-1))
-    time_UTC = np.array(days_into_UTC(time_fit,time_d,start_hour="00:00:00")) #change days into UTC
-    time_fit_ransac = list(line_y_ransac.reshape(-1))
-    time_UTC_ransac = np.array(days_into_UTC(time_fit_ransac,time_d,start_hour="00:00:00")) #change days into UTC
+    #time_fit_linear = list(t_linear.reshape(-1))
+    #time_UTC_linear = np.array(days_into_UTC(time_fit_linear)) #change days into UTC
+    time_fit_ransac = list(t_ransac.reshape(-1))
+    time_UTC_ransac = np.array(days_into_UTC(time_fit_ransac)) #change days into UTC
+    time_fit_rlm = list(t_rlm.reshape(-1))
+    time_UTC_rlm = np.array(days_into_UTC(time_fit_rlm)) #change days into UTC
 
     # Compare estimated coefficients
     #print("Estimated coefficients (true, linear regression, RANSAC):")
@@ -792,13 +786,18 @@ def robust_fit(time,diam):
     lw = 2
     #plt.plot(time_UTC, diam_linear, color="navy", linewidth=lw, label="Linear regressor")
     #plt.plot(time_UTC_ransac,diam_linear,color="cornflowerblue",linewidth=lw,label="RANSAC regressor")
-    plt.plot(time_UTC, diam_log, color="navy", linewidth=lw, label="Linear regressor")
-    plt.plot(time_UTC_ransac,diam_log,color="red",linewidth=lw,label="RANSAC regressor")
+    #plt.plot(time_UTC_linear, diam_linear, color="navy", linewidth=lw)
+    plt.plot(time_UTC_ransac, diam_linear,color="red",linewidth=lw)
+    plt.plot(time_UTC_rlm, diam_linear,color="orange",linewidth=lw)
     
-    midpoint_idx = len(time_fit) // 2 #growth rate value
+    #growth rate annotation
+    gr = 1/(ransac.estimator_.coef_[0][0]*24) #unit to nm/h from time in days
+    '''
+    midpoint_idx = len(t_fit) // 2 #growth rate value
     midpoint_time = time_UTC[midpoint_idx]
     midpoint_value = diam[midpoint_idx]
     plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
+    '''
     
 def plot_GRs(time,diam):
     '''
@@ -807,11 +806,11 @@ def plot_GRs(time,diam):
     Flipped as the error is in time.
     '''
     #linear least square fits
-    params, pcov = curve_fit(linear, np.log(diam), time) #logarthmic diam
-    params2, pcov2 = curve_fit(linear, diam, time) #linear diam
-    gr = 1/(params2[0]*24) #unit to nm/h from time in days
-    time_fit = params[0]*np.log(diam) + params[1]
-    time_UTC = np.array(days_into_UTC(time_fit,time_d,start_hour="00:00:00")) #change days into UTC
+    #params, pcov = curve_fit(linear, np.log(diam), time) #logarthmic diam
+    params, pcov = curve_fit(linear, diam, time) #linear diam
+    gr = 1/(params[0]*24) #unit to nm/h from time in days
+    time_fit = params[0]*np.array(diam) + params[1]
+    time_UTC = np.array(days_into_UTC(time_fit)) #change days into UTC
 
     #plotting
     plt.plot(time_UTC,diam,lw=3) #line
@@ -849,11 +848,11 @@ def plot_manual_GR(times,diams,time_range,diam_range):
     y = np.sort(sub_times)
 
     #linear least square fits
-    params, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
-    params2, pcov2 = curve_fit(linear, x, y) #linear x
-    gr = 1/(params2[0]*24) #unit to nm/h from time in days
-    y_fit = params[0]*np.log(x) + params[1]
-    x_UTC = np.array(days_into_UTC(y_fit,time_d,start_hour="00:00:00")) #change days into UTC
+    #params, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
+    params, pcov = curve_fit(linear, x, y) #linear x
+    gr = 1/(params[0]*24) #unit to nm/h from time in days
+    y_fit = params[0]*x + params[1] #TOOK LOG(x) AWAY
+    x_UTC = np.array(days_into_UTC(y_fit)) #change days into UTC
 
     #plotting
     plt.plot(x_UTC,x,lw=3) #line
@@ -874,6 +873,7 @@ def plot_PSD(dataframe):
     for i in dataframe.index:
         day = i.strftime("%d")  
         if day != new_day:
+            i = i - timedelta(minutes=15) #shift back 15mins due to resolution change
             plt.axvline(x=i, color='black', linestyle='-', lw=1)
         new_day = day
     #fig, ax1 = plt.subplots(figsize=(9, 4.7))
@@ -884,9 +884,10 @@ def plot_PSD(dataframe):
     #growth rates
     time_mc, diam_mc, time_at, diam_at = init_find()
     for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
-        plot_GRs(time_seg_mc, diam_seg_mc) #maximum concentration
-        plot_GRs(time_seg_at, diam_seg_at) #appearance time
-        #robust_fit(time_seg_at, diam_seg_at)
+        #plot_GRs(time_seg_mc, diam_seg_mc) #maximum concentration
+        #plot_GRs(time_seg_at, diam_seg_at) #appearance time
+        robust_fit(time_seg_at, diam_seg_at)
+        robust_fit(time_seg_mc, diam_seg_mc)
 
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
@@ -898,7 +899,7 @@ def plot_PSD(dataframe):
     plt.ylim(dataframe.columns[0],dataframe.columns[-1])
     plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
     plt.xlabel("time",fontsize=14) #add y-axis label
-plot_PSD(df)
+#plot_PSD(df)
 
 def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     '''
@@ -912,9 +913,11 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     Assumes chosen channel has modes that have been found with the maximum concentration method!!!
     '''   
     
+    '''1 assemble all datasets'''
     xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv = run_ranges()
 
-    if choose_GR != None: #choose range that is plotted
+    '''1.5 (if a specific range is wanted) choose range that is plotted and modify datasets accodingly'''
+    if choose_GR != None: 
         gr_indices = [i for i, x in enumerate(GRs_maxcon) if x == choose_GR] #maximum concentration 
         xyz_maxcon[0] = [xyz_maxcon[0][i] for i in gr_indices]
         xyz_maxcon[1] = [xyz_maxcon[1][i] for i in gr_indices]
@@ -929,7 +932,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         xyz_appear[2] = [xyz_appear[2][i] for i in gr_indices]
         fitting_parameters_logi = [fitting_parameters_logi[i] for i in gr_indices]
 
-
+    '''2 define lists and their shapes'''
     mode_edges = []             #[(diameter,start_time (UTC),end_time (UTC)), ...]
     range_edges = []            #[(diameter,start_time (UTC),end_time (UTC)), ...]
     xy_maxcon =  []             #[(max con diameter, max con time (UTC), max con), ...]
@@ -938,10 +941,10 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     mode_times_UTC = []         #[(diameter, time UTC), ...]
     appearances = []            #[(diameter, time (UTC), concentration), ...] 
 
-    #finding data with chosen diameters
+    '''3 find data in datasets with chosen diameters'''
     for diam in diameter_list:
         #MAXIMUM CONCENTRATION & TIME
-        indices = [i for i, a in enumerate(xyz_maxcon[1]) if a == diam]
+        indices = [i for i, a in enumerate(xyz_maxcon[1]) if a == diam] #indices of datapoints with wanted diameter
         xy_maxcons = [(xyz_maxcon[1][b],xyz_maxcon[0][b],xyz_maxcon[2][b]) for b in indices]
         [xy_maxcon.append(i) for i in xy_maxcons]
 
@@ -978,13 +981,12 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
                 
             except KeyError:
                 continue
-                #print("Channel not in this range.")
 
     #find unique values
-    xy_maxcon = list(dict.fromkeys(xy_maxcon))
+    #xy_maxcon = list(dict.fromkeys(xy_maxcon))
 
 
-    #####   PLOTTING   #####
+    '''4 plotting'''
     fig, ax1 = plt.subplots(len(diameter_list),2,figsize=(9, 4.7), dpi=300)
     fig.subplots_adjust(wspace=0.38, hspace=0.29) #adjust spaces between subplots
 
@@ -996,9 +998,9 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         y_list.append(y)
 
 
-    #concentration
-    row_num = 0 #keeps track of which row of figure we are plotting in
-    for y in y_list:
+    #PLOTS ON THE LEFT
+    #row_num keeps track of which row of figure we are plotting in
+    for row_num, y in enumerate(y_list):
         ax1[row_num,0].set_title(f'dp: ≈{diameter_list[row_num]:.2f} nm', loc='right', fontsize=8) #diameter titles
 
         #left axis (normal scale)
@@ -1010,6 +1012,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             item.set_fontweight("bold")
         ax1[row_num,0].tick_params(axis='y', labelcolor=color1)
 
+        '''
         #start and end points of modes
         found_ranges = []
         for edges in mode_edges:
@@ -1017,7 +1020,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             if diam == diameter_list[row_num] and edges not in found_ranges:
                 line1 = ax1[row_num,0].axvspan(start, end, alpha=0.13, color='darkorange')
                 found_ranges.append(edges) #plot the same range once
-        
+        '''
 
         #right axis (logarithmic scale)
         ax2 = ax1[row_num,0].twinx()
@@ -1038,13 +1041,14 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             indices = [df.index.get_loc(row) for row in time_range]
             mode_times_days.append(time_d_res[indices]) #define time in days again depending on chosen range
 
-
+        
         #gaussian
         for params in fitting_params_gaus:
             diam, start_time, end_time, a, mu, sigma = params
             
-            start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24,time_d_res,start_hour="00:15:00")).dt.round('30min')[0] #change days into UTC
-            end_time_UTC = pd.Series(days_into_UTC(end_time-0.25/24,time_d_res,start_hour="00:15:00")).dt.round('30min')[0] #RESOLUTION IS 30MINS HERE
+            #change days into UTC
+            start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24)).dt.round('30min')[0] 
+            end_time_UTC = pd.Series(days_into_UTC(end_time-0.25/24)).dt.round('30min')[0]
             start_time_UTC += timedelta(minutes=15) #makes it easier to round
             end_time_UTC += timedelta(minutes=15)
 
@@ -1056,9 +1060,10 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         #logistic
         for params in fitting_params_logi:
             diam1, start_time, end_time, L, x0, k = params
-           
-            start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24,time_d_res,start_hour="00:15:00")).dt.round('30min')[0] #change days into UTC
-            end_time_UTC = pd.Series(days_into_UTC(end_time-0.25/24,time_d_res,start_hour="00:15:00")).dt.round('30min')[0]
+
+            #change days into UTC
+            start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24)).dt.round('30min')[0] 
+            end_time_UTC = pd.Series(days_into_UTC(end_time-0.25/24)).dt.round('30min')[0]
             start_time_UTC += timedelta(minutes=15) #makes it easier to round
             end_time_UTC += timedelta(minutes=15)
 
@@ -1089,10 +1094,8 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         if row_num == 0:
             ax1[row_num,0].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
 
-        row_num += 1
 
-
-    #DERIVATIVE
+    #PLOTS ON THE RIGHT
     df_1st_derivatives = cal_1st_derivative(df,time_days=time_d_res)
 
     x = df_1st_derivatives.index #time
@@ -1101,8 +1104,8 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         y = df_1st_derivatives[diam]
         y_list.append(y)
 
-    row_num = 0 #keeps track of which row of figure we are plotting in
-    for y in y_list:
+    #row_num keeps track of which row of figure we are plotting in
+    for row_num, y in enumerate(y_list):
         if choose_GR != None:
             ax1[row_num,1].set_title(f'range: {choose_GR} nm/h', loc='left', fontsize=8) #range titles
 
@@ -1139,8 +1142,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             diam, x_maxcon, y_maxcon = i
             y_maxcon = y_maxcon*0 #to place the start lower where y = 0
             if diam == diameter_list[row_num]:
-                ax1[row_num,1].plot(x_maxcon, y_maxcon, '*', color="white",ms=5, mew=0.6,alpha=0.8)
-                
+                ax1[row_num,1].plot(x_maxcon, y_maxcon, '*', color="white",ms=5, mew=0.6,alpha=0.8)  
         
         #appearance time
         for i in appearances:
@@ -1170,8 +1172,9 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         ax2.axhline(y=0.03, color='green', linestyle='--', lw=0.7, label="threshold = 0.03",zorder=1)
         ax2.axhline(y=-0.03, color='green', linestyle='--', lw=0.7,zorder=1)
         """
-        row_num += 1
 
+
+    ### FEW ADJUSTMENTS ###
     #common titles
     ax1[0,0].set_title("Concentration", fontsize=10, fontweight="bold") 
     ax1[0,1].set_title("Derivative", fontsize=10, fontweight="bold")
@@ -1188,15 +1191,19 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     
     #set black edges to star markers in the legend
     for i in range(2):
-        white_star = ax1[0,i].get_legend().legend_handles[0]
-        green_star = ax1[0,i].get_legend().legend_handles[1]
+        if i == 1:
+            white_star = ax1[0,i].get_legend().legend_handles[0]
+            green_star = ax1[0,i].get_legend().legend_handles[1]
+        else:
+            white_star = ax1[0,i].get_legend().legend_handles[2]
+            green_star = ax1[0,i].get_legend().legend_handles[3]
         white_star.set_markeredgewidth(0.4)
         green_star.set_markeredgewidth(0.4)
         white_star.set_markeredgecolor("black")
         green_star.set_markeredgecolor("black")
     
     fig.tight_layout()
-#plot_channel(df,[df.columns[15],df.columns[16]],choose_GR=1.1,draw_range_edges=True)
+plot_channel(df,[df.columns[15],df.columns[16]],choose_GR=1.1,draw_range_edges=True)
 
 plt.show()
 
