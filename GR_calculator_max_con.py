@@ -128,10 +128,11 @@ df.index=df['time (UTC)']
 df = df.drop(['time (UTC)'], axis=1)
 
 df.columns = pd.to_numeric(df.columns) * 10**9 #set numerical diameters as column headers, units from m to nm
+#df.to_csv('./data_original.csv', sep=',', header=True, index=True, na_rep='nan')
 df, time_d_res = avg_filter(df,resolution=30) #filtering
 
 #with this we can check the format
-#df.to_csv('./data_format.csv', sep=',', header=True, index=True, na_rep='nan')
+#df.to_csv('./data_filtered.csv', sep=',', header=True, index=True, na_rep='nan')
 
 ####################################################
 #useful functions
@@ -367,10 +368,15 @@ def maximum_concentration(dataframe):
         x = [] #time
         y = [] #concentration
         for t in range(len(df_modes.index)):
-            concentration = df_modes.iloc[t,dp] - np.min(df_modes.iloc[:,dp]) #find concentration values from the dataframe (y)
-            time = time_d_range[t] - np.min(time_d_range)
+            time = time_d_range[t]
+            concentration = df_modes.iloc[t,dp] #find concentration values from the dataframe (y)
 
             if np.isnan(concentration) and len(y) != 0: #gaussian fit when all values of one mode have been added to the y list
+                #gaussian fit to get maximum concentration values
+                x = x - np.min(time_d_range) #normalize so that min value is 0
+                y_min = np.min(y)
+                y = y - y_min
+                
                 mu=np.mean(x) #parameters
                 sigma = np.std(x)
                 a = np.max(y)
@@ -402,7 +408,8 @@ def maximum_concentration(dataframe):
                         dfs_mode_start.append(df_mode_start) #add to list of dfs
                         dfs_mode_end.append(df_mode_end)
                         
-                        fitting_params.append([start_time_days, end_time_days, params[0] + np.min(df_modes.iloc[:,dp]), params[1]+np.min(time_d_range), params[2]]) #gaussian fit parameters                                
+                        #gaussian fit parameters with start and end times and minimum concentration of horizontal mode
+                        fitting_params.append([start_time_days, end_time_days, params[0], params[1]+np.min(time_d_range), params[2], y_min])                               
                 except:
                     print("Diverges. Skipping.")
                                     
@@ -447,16 +454,21 @@ def appearance_time(dataframe):
     df_modes = find_modes(dataframe,df_deriv,threshold_deriv=0.05) #find modes
 
     #logistic fit to every mode
-    for dp in range(len(df_modes.columns)):
+    for dp_index in range(len(df_modes.columns)):
         x = [] #time
         y = [] #concentration
-        for t in range(len(df_modes.index)):
-            concentration = df_modes.iloc[t,dp] - np.min(df_modes.iloc[:,dp]) #find concentration values from the dataframe (y)
-            time = time_d_range[t] - np.min(time_d_range)
+        for t_index in range(len(df_modes.index)):
+            time = time_d_range[t_index]
+            concentration = df_modes.iloc[t_index,dp_index] #find concentration values from the dataframe (y)    
 
             if np.isnan(concentration) and len(y) != 0: #logistic fit when all values of one mode have been added to the y list 
                 #gaussian fit to get maximum concentration values
-                mu=np.mean(x) #parameters
+                x = x - np.min(time_d_range) #normalize so that min value is 0
+                y_min = np.min(y)
+                y = y - y_min
+                
+                #initial guess for parameters
+                mu=np.mean(x)
                 sigma = np.std(x)
                 a = np.max(y)
 
@@ -465,7 +477,7 @@ def appearance_time(dataframe):
                     if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
                         print("Peak outside range. Skipping.")
                     else:
-                        max_conc_time = params[1]
+                        max_conc_time = params[1] #from gaussian fit
 
                         #limit x and y to values between start time of mode and maximum concentration time in mode
                         max_conc_index = closest(x, max_conc_time)
@@ -474,8 +486,9 @@ def appearance_time(dataframe):
                         
                         #logistic fit
                         if len(y_sliced) != 0:
-                            L = np.max(y_sliced) #maximum value (concentration)
-                            x0 = np.nanmean(x_sliced) #midpoint x value
+                            #initial guess for parameters
+                            L = params[0] #maximum value of gaussian fit (concentration)
+                            x0 = np.nanmean(x_sliced) #midpoint x value (appearance time)
                             k = 1.0 #growth rate
 
                             try:
@@ -485,12 +498,11 @@ def appearance_time(dataframe):
                                     print("Peak outside range. Skipping.")
                                 else:
                                     appear_time = np.append(appear_time,params[1] + np.min(time_d_range)) #make a list of times with the appearance time in each diameter
-                                    appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp])) 
-                                    
-                                    mid_conc_index = closest(x_sliced, params[1]) #find closest value in x to the calculated parameter for appearance time
-                                    mid_conc.append(y_sliced[mid_conc_index] + np.min(df_modes.iloc[:,dp])) #appearance time concentration (~50% maximum concentration) 
+                                    appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp_index])) 
+                                    mid_conc.append(params[0]/2+y_min) #appearance time concentration (~50% maximum concentration), L/2, y_min to preserve shape of graph
 
-                                    fitting_params.append([x[0]+ np.min(time_d_range),x[-1]+ np.min(time_d_range),params[0]+ np.min(df_modes.iloc[:,dp]),params[1]+np.min(time_d_range),params[2]]) #logistic fit parameters with time range       
+                                    #logistic fit parameters with time range and minimum concentration of horizontal mode
+                                    fitting_params.append([x[0]+np.min(time_d_range), x[-1]+np.min(time_d_range), params[0], params[1]+np.min(time_d_range), params[2], y_min])                                 
                             except:
                                 print("Logistic diverges. Skipping.")
                         else:
@@ -884,10 +896,10 @@ def plot_PSD(dataframe):
     #growth rates
     time_mc, diam_mc, time_at, diam_at = init_find()
     for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
-        #plot_GRs(time_seg_mc, diam_seg_mc) #maximum concentration
-        #plot_GRs(time_seg_at, diam_seg_at) #appearance time
-        robust_fit(time_seg_at, diam_seg_at)
-        robust_fit(time_seg_mc, diam_seg_mc)
+        plot_GRs(time_seg_mc, diam_seg_mc) #maximum concentration
+        plot_GRs(time_seg_at, diam_seg_at) #appearance time
+        #robust_fit(time_seg_at, diam_seg_at)
+        #robust_fit(time_seg_mc, diam_seg_mc)
 
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
@@ -899,7 +911,7 @@ def plot_PSD(dataframe):
     plt.ylim(dataframe.columns[0],dataframe.columns[-1])
     plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
     plt.xlabel("time",fontsize=14) #add y-axis label
-#plot_PSD(df)
+plot_PSD(df)
 
 def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     '''
@@ -950,12 +962,12 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
 
         #FITTING PARAMETERS FOR GAUSSIAN FIT
         indices = [i for i, a in enumerate(xyz_maxcon[1]) if a == diam]
-        fittings = [(xyz_maxcon[1][b],fitting_parameters_gaus[b][0],fitting_parameters_gaus[b][1],fitting_parameters_gaus[b][2],fitting_parameters_gaus[b][3],fitting_parameters_gaus[b][4]) for b in indices]
+        fittings = [(xyz_maxcon[1][b],fitting_parameters_gaus[b][0],fitting_parameters_gaus[b][1],fitting_parameters_gaus[b][2],fitting_parameters_gaus[b][3],fitting_parameters_gaus[b][4],fitting_parameters_gaus[b][5]) for b in indices]
         [fitting_params_gaus.append(i) for i in fittings]
 
         #FITTING PARAMETERS FOR LOGISTIC FIT
         indices = [i for i, a in enumerate(xyz_appear[1]) if a == diam]
-        fittings = [(xyz_appear[1][b],fitting_parameters_logi[b][0],fitting_parameters_logi[b][1],fitting_parameters_logi[b][2],fitting_parameters_logi[b][3],fitting_parameters_logi[b][4]) for b in indices]
+        fittings = [(xyz_appear[1][b],fitting_parameters_logi[b][0],fitting_parameters_logi[b][1],fitting_parameters_logi[b][2],fitting_parameters_logi[b][3],fitting_parameters_logi[b][4],fitting_parameters_logi[b][5]) for b in indices]
         [fitting_params_logi.append(i) for i in fittings]
 
         #APPEARANCE TIME & CONCENTRATION
@@ -989,14 +1001,10 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     '''4 plotting'''
     fig, ax1 = plt.subplots(len(diameter_list),2,figsize=(9, 4.7), dpi=300)
     fig.subplots_adjust(wspace=0.38, hspace=0.29) #adjust spaces between subplots
-
+ #parameters
     #define x and y for the whole channel
     x = dataframe.index #time
-    y_list = [] #concentrations
-    for diam in diameter_list:
-        y = dataframe[diam]
-        y_list.append(y)
-
+    y_list = [dataframe[diam] for diam in diameter_list] #concentrations
 
     #PLOTS ON THE LEFT
     #row_num keeps track of which row of figure we are plotting in
@@ -1044,7 +1052,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         
         #gaussian
         for params in fitting_params_gaus:
-            diam, start_time, end_time, a, mu, sigma = params
+            diam, start_time, end_time, a, mu, sigma, conc_min = params
             
             #change days into UTC
             start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24)).dt.round('30min')[0] 
@@ -1054,12 +1062,12 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
 
             for time_UTC,time_days in zip(mode_times_UTC,mode_times_days):
                 if diam == diameter_list[row_num] and time_UTC[1][0] == start_time_UTC and time_UTC[1][-1] == end_time_UTC: #check that plotting happens in the right mode
-                    line2, = ax1[row_num,0].plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
-                    ax2.plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
+                    line2, = ax1[row_num,0].plot(time_UTC[1], gaussian(time_days,a,mu,sigma) + conc_min, '--', color="mediumturquoise",lw=1.2)
+                    ax2.plot(time_UTC[1], gaussian(time_days,a,mu,sigma) + conc_min, '--', color="mediumturquoise",lw=1.2)
         
         #logistic
         for params in fitting_params_logi:
-            diam1, start_time, end_time, L, x0, k = params
+            diam, start_time, end_time, L, x0, k, conc_min = params
 
             #change days into UTC
             start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24)).dt.round('30min')[0] 
@@ -1068,9 +1076,9 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             end_time_UTC += timedelta(minutes=15)
 
             for time_UTC,time_days in zip(mode_times_UTC,mode_times_days):     
-                if diam1 == diameter_list[row_num] and time_UTC[1][0] == start_time_UTC and time_UTC[1][-1] == end_time_UTC: #check that plotting happens in the right mode
-                    line3, = ax1[row_num,0].plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="gold",lw=1.2)
-                    ax2.plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="gold",lw=1.2)
+                if diam == diameter_list[row_num] and time_UTC[1][0] == start_time_UTC and time_UTC[1][-1] == end_time_UTC: #check that plotting happens in the right mode
+                    line3, = ax1[row_num,0].plot(time_UTC[1], logistic(time_days,L,x0,k) + conc_min, '--', color="gold",lw=1.2)
+                    ax2.plot(time_UTC[1], logistic(time_days,L,x0,k) + conc_min, '--', color="gold",lw=1.2)
 
         #maximum concentration
         for i in xy_maxcon:
@@ -1099,10 +1107,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     df_1st_derivatives = cal_1st_derivative(df,time_days=time_d_res)
 
     x = df_1st_derivatives.index #time
-    y_list = [] #concentrations
-    for diam in diameter_list:
-        y = df_1st_derivatives[diam]
-        y_list.append(y)
+    y_list = [df_1st_derivatives[diam] for diam in diameter_list] #concentrations
 
     #row_num keeps track of which row of figure we are plotting in
     for row_num, y in enumerate(y_list):
@@ -1118,7 +1123,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             item.set_fontweight("bold")
         ax1[row_num,1].tick_params(axis='y', labelcolor=color1)
         line6 = ax1[row_num,1].axhline(y=threshold_deriv, color="royalblue", linestyle='--', lw=1)
-        ax1[row_num,1].axhline(y=-threshold_deriv, color="royalblue", linestyle='--', lw=1)
+        ax1[row_num,1].axhline(y= -threshold_deriv, color="royalblue", linestyle='--', lw=1)
         
         #start and end points of modes
         found_ranges = []
@@ -1183,27 +1188,31 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     
     #common legends
     #ax1[0,0].legend([line1,line2,line3,line4,line5],["mode edges","gaussian fit","logistic fit","maximum concentration","appearance time"],fancybox=False,framealpha=0.9,loc='upper center', bbox_to_anchor=(0.85, 1.8), fontsize=8)
-    ax1[0,0].legend([line2,line3,line4,line5,line7],["gaussian fit","logistic fit","maximum concentration","appearance time","mode edges"],fancybox=False,framealpha=0.9, fontsize=4, loc="best")
+    legend_1 = ax1[0,0].legend([line2,line3,line4,line5,line7],["gaussian fit","logistic fit","maximum concentration","appearance time","mode edges"],fancybox=False,framealpha=0.9, fontsize=4, loc="upper right")
+    legend_1.remove() #to have the legend on top of graph lines
+    legend_11 = ax2.add_artist(legend_1)
+    
     if draw_range_edges == True:
-        ax1[0,1].legend([line4,line5,line7,line8,line6],["maximum concentration","appearance time","mode edges","range",f"threshold = {str(threshold_deriv)}"],fancybox=False,framealpha=0.9, loc='upper right', fontsize=4)
+        legend_2 = ax1[0,1].legend([line4,line5,line7,line8,line6],["maximum concentration","appearance time","mode edges","range",f"threshold = {str(threshold_deriv)}"],fancybox=False,framealpha=0.9, loc='upper right', fontsize=4)
     else:
-        ax1[0,1].legend([line4,line5,line7,line6],["maximum concentration","appearance time","mode edges",f"threshold = {str(threshold_deriv)}"],fancybox=False,framealpha=0.9, loc='upper right', fontsize=4)
+        legend_2 = ax1[0,1].legend([line4,line5,line7,line6],["maximum concentration","appearance time","mode edges",f"threshold = {str(threshold_deriv)}"],fancybox=False,framealpha=0.9, loc='upper right', fontsize=4)
     
     #set black edges to star markers in the legend
-    for i in range(2):
-        if i == 1:
-            white_star = ax1[0,i].get_legend().legend_handles[0]
-            green_star = ax1[0,i].get_legend().legend_handles[1]
-        else:
-            white_star = ax1[0,i].get_legend().legend_handles[2]
-            green_star = ax1[0,i].get_legend().legend_handles[3]
-        white_star.set_markeredgewidth(0.4)
-        green_star.set_markeredgewidth(0.4)
-        white_star.set_markeredgecolor("black")
-        green_star.set_markeredgecolor("black")
+    white_star11 = legend_11.legend_handles[2]
+    green_star11 = legend_11.legend_handles[3]
+    white_star2 = legend_2.legend_handles[0]
+    green_star2 = legend_2.legend_handles[1]
+    white_star11.set_markeredgewidth(0.4)
+    green_star11.set_markeredgewidth(0.4)
+    white_star11.set_markeredgecolor("black")
+    green_star11.set_markeredgecolor("black")
+    white_star2.set_markeredgewidth(0.4)
+    green_star2.set_markeredgewidth(0.4)
+    white_star2.set_markeredgecolor("black")
+    green_star2.set_markeredgecolor("black")
     
     fig.tight_layout()
-plot_channel(df,[df.columns[15],df.columns[16]],choose_GR=1.1,draw_range_edges=True)
+plot_channel(df,[df.columns[15],df.columns[16]],choose_GR=None,draw_range_edges=True)
 
 plt.show()
 
