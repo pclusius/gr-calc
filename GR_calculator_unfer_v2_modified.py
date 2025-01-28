@@ -326,7 +326,10 @@ def find_segments(df,abr):
     return segments    
 
 ##################################################
-
+#TÄÄ ON OK NÄIN
+#mitä pidempi suorta on tai mitä enemmän pistetiä löytyy sitä enemmän vaihtelua mape sallii myöhemmin
+#riippuen datapisteiden määrästä mape muuttuu, mape N:n funktiona
+#alussa mape isompi, myöhemmin pienempi
 def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 -> mape_threshold=5
     combined_segments = []
     start = 0
@@ -365,7 +368,9 @@ def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 
 
 ###################################################
 
-### ADDED NEW WAY TO COMBINE SEGMENTS
+### ADDED NEW WAY TO COMBINE SEGMENTS I.E TIMESTAMPS
+#YHDISTÄ KAIKKI MOODIT ENSIN YHTEEN
+#ETSI AINA AIKASTEPPI KERRALLAAN +-10nm VÄLILLÄ SEURAAVA PISTE, MOODIEN VÄLISSÄ +- VOI OLLA LAAJEMPI (15nm?)
 def combine_segments_ver2(df, abr, segments, mape_threshold=5):
     combined_segments = []
     start = 0
@@ -570,7 +575,7 @@ def drop_after_first_nan(df, column):
         return df.loc[:first_nan_index].iloc[:-1]
     return df
 
-
+#YRITÄ YMMÄRTÄÄ MITEN TÄÄ TOIMII ELI MITEN YHDISTETÄÄN MOODEJA
 def process_data2(dfA, m1, dfB, m2, diameter_diff):
     lista = []
     listaA_del = []
@@ -592,9 +597,9 @@ def process_data2(dfA, m1, dfB, m2, diameter_diff):
             
             if (dfB['d_initial'].iloc[idx_position] - dfA['d_final'].iloc[j]) < diameter_diff: ###Checks if the GR of the previous mode is close enough with the GR in the current mode
             
-                start2 = dfB.index[idx_position]       # !!!
+                start2 = dfB.index[idx_position]       # !!! KATO TÄÄ
                 end2 = dfB['end'].iloc[idx_position]
-                df_m2 = df_modes.loc[start2:end2, [m2+'_A', m2+'_d', m2+'_s']]
+                df_m2 = df_modes.loc[start2:end2, [m2+'_A', m2+'_d', m2+'_s']] # TÄÄÄ
                 df_m2.columns = ['m_A', 'm_d', 'm_s']
                          
                 df_comb1 = pd.concat([df_m1, df_m2], axis=0)
@@ -611,7 +616,7 @@ def process_data2(dfA, m1, dfB, m2, diameter_diff):
                     if idx_position + 1 < len(dfB) and (dfB.index[idx_position + 1] - dfB['end'].iloc[idx_position] > pd.Timedelta(minutes=30)): ### minutes=5 -> minutes=30
                         
                         df_m2_next = df_modes.loc[start2:(dfB.index[idx_position + 1] - pd.Timedelta(minutes=30)), [m2+'_A', m2+'_d', m2+'_s']] ### minutes=5 -> minutes=30
-                        df_m2_next.columns = ['m_A', 'm_d', 'm_s']
+                        df_m2_next.columns = ['m_A', 'm_d', 'm_s'] # JA TÄÄ YLEMPI
                         df_comb2 = pd.concat([df_m1, df_m2_next], axis=0)
                         #print(df_comb2)
                         
@@ -686,13 +691,16 @@ print('Checking modes 1 and 2...')
 df_all1, df_new2, df_del = process_data2(df_GR_m1,'m1', df_GR_m2, 'm2', 3)
 df_all1.insert(0,'start',df_all1.index)
 df_all1 = df_all1.reset_index(drop=True)
-print(df_all1)
 
 print('Checking modes 2 and 3...')
 df_all2, df_new3, df_del = process_data2(df_new2,'m2', df_GR_m3, 'm3', 5)
 df_all2.insert(0,'start',df_all2.index)
 df_all2 = df_all2.reset_index(drop=True)
 print(df_all2)
+print("df_GR_m2",df_GR_m2)
+print("df_GR_m3",df_GR_m3)
+print("df_new3",df_new3)
+print("df_del",df_del)
 
 print('Checking modes 3 and 4...')
 df_all3, _, df_del = process_data2(df_new3,'m3', df_GR_m4, 'm4', 10)
@@ -700,14 +708,15 @@ df_all3.insert(0,'start',df_all3.index)
 df_all3 = df_all3.reset_index(drop=True)
 print(df_all3)
 
+
 ###################
 
 df_all1_m2 = df_all1[df_all1['mode'] == 'm2']
 df_all2_m2 = df_all2[df_all2['mode'] == 'm2']
 
-# Identificar as linhas no df_all1_m2 que não estão presentes no df_all2_m2
+# Identify the rows in df_all1_m2 that are not present in df_all2_m2
 to_remove = df_all1_m2[~df_all1_m2.apply(tuple, axis=1).isin(df_all2_m2.apply(tuple, axis=1))]
-# Excluir as linhas identificadas do df_all1
+# Delete the identified rows from df_all1
 df_all1_filtered = df_all1.drop(to_remove.index)
 
 ###
@@ -715,9 +724,9 @@ df_all1_filtered = df_all1.drop(to_remove.index)
 df_all2_m3 = df_all2[df_all2['mode'] == 'm3']
 df_all3_m3 = df_all3[df_all3['mode'] == 'm3']
 
-# Identificar as linhas no df_all1_m2 que não estão presentes no df_all2_m2
+# Identify the rows in df_all2_m3 that are not present in df_all3_m3
 to_remove = df_all2_m3[~df_all2_m3.apply(tuple, axis=1).isin(df_all3_m3.apply(tuple, axis=1))]
-# Excluir as linhas identificadas do df_all1
+# Delete the identified rows from df_all2
 df_all2_filtered = df_all2.drop(to_remove.index)
 
 
