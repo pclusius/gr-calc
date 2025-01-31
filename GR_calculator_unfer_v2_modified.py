@@ -17,6 +17,9 @@ from scipy.optimize import curve_fit, OptimizeWarning
 import warnings
 from scipy import stats
 from os import listdir ###
+import json ###
+from operator import itemgetter ###
+from collections import defaultdict ###
 
 ###################################################################
 #paths = "./dmps Nesrine/dm160401.sum" ###path to data file
@@ -76,7 +79,6 @@ modefit_names = ["output_modefit_2016_06_12.csv"]
 #modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv"]
 #modefit_names = ["output_modefit_2016_04_26.csv","output_modefit_2016_04_27.csv","output_modefit_2016_04_28.csv"]
 
-###modified from Janne's code "NpfEventAnalyzer.py":
 ### load data for n days: ###
 def combine_data(files,separation):
     dfs = []
@@ -195,9 +197,39 @@ df4 = df4.astype(float)
 
 #df4[(df4['R2']<0.7)] = np.nan ### 0.8 -> 0.7 COMMENTED AWAY, filters away mode fitting values that dont have a high enough r^2 value
 
-
 ##############################################################
-def place_modes(row):
+###LOADING A JSON FILE
+
+with open("12062016_mode_fits.json") as file:
+    mode_fits = json.load(file)
+
+#processing modefitting data
+#making a dataframe from json file
+rows_list = []
+for timestamp in mode_fits:
+    ts = timestamp['time']
+    peak_diams = timestamp['peak_diams']
+    
+    for i, gaussians in enumerate(timestamp['gaussians']):
+        mean = gaussians['mean']
+        sigma = gaussians['sigma']
+        amplitude = gaussians['amplitude']
+
+        dict_row = {'timestamp':ts,'amplitude':amplitude,'peak_diameter':peak_diams[i]*10**9,'sigma':sigma} #diam unit m to nm
+        rows_list.append(dict_row)
+
+df_modefits = pd.DataFrame(rows_list)  
+
+#timestamps to index, timestamp strings to datetime objects
+df_modefits['timestamp']=pd.to_datetime(df_modefits['timestamp'], format="%Y-%m-%d %H:%M:%S")
+df_modefits.index=df_modefits['timestamp']
+df_modefits = df_modefits.drop(['timestamp'], axis=1)
+
+print('df_modefits',df_modefits)
+   
+###
+##############################################################
+def place_modes(row): ###places some modefitting data to their right modes (1-4)
     if row['m1_d'] >= 20 and row['m2_A'] == 0:
         row['m2_A'], row['m2_d'], row['m2_s'] = row['m1_A'], row['m1_d'], row['m1_s']
         row['m1_A'], row['m1_d'], row['m1_s'] = 0, 10, 1.1
@@ -326,10 +358,8 @@ def find_segments(df,abr):
     return segments    
 
 ##################################################
-#TÄÄ ON OK NÄIN
-#mitä pidempi suorta on tai mitä enemmän pistetiä löytyy sitä enemmän vaihtelua mape sallii myöhemmin
-#riippuen datapisteiden määrästä mape muuttuu, mape N:n funktiona
-#alussa mape isompi, myöhemmin pienempi
+#mitä pidempi suora on tai mitä enemmän pisteitä löytyy sitä enemmän vaihtelua mape sallii myöhemmin
+#riippuen datapisteiden määrästä mape muuttuu, mape N:n funktiona, alussa mape isompi, myöhemmin pienempi
 def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 -> mape_threshold=5
     combined_segments = []
     start = 0
@@ -358,7 +388,7 @@ def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 
                        
             end += 1
               
-        if len (comb_segs_data) == 3 and mape > mape_threshold:
+        if len (comb_segs_data) == 3 and mape > mape_threshold: ### if there with three black dots mape is too big drop the first black dot, start becomes the dot after
             start = end-1
         else:           
             combined_segments.append((segments[start], segments[min(end-1, len(segments)-1)]))
@@ -371,45 +401,107 @@ def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 
 ### ADDED NEW WAY TO COMBINE SEGMENTS I.E TIMESTAMPS
 #YHDISTÄ KAIKKI MOODIT ENSIN YHTEEN
 #ETSI AINA AIKASTEPPI KERRALLAAN +-10nm VÄLILLÄ SEURAAVA PISTE, MOODIEN VÄLISSÄ +- VOI OLLA LAAJEMPI (15nm?)
-def combine_segments_ver2(df, abr, segments, mape_threshold=5):
-    combined_segments = []
-    start = 0
+def combine_connected_pairs(list):
+    ''' From AI
+    Takes in a list of lists with pairs of datapoints and
+    returns a list with lists pooled together containing
+    overlapping elements. 
+    '''
+    # Convert arrays to tuples for hashing and build adjacency list
+    graph = defaultdict(set)
+    for p1, p2 in list:
+        graph[tuple(p1)].add(tuple(p2))
+        graph[tuple(p2)].add(tuple(p1))
+    
+    # Find connected components using DFS
+    visited = set()
+    combined_lists = []
+    
+    for node in graph:
+        if node not in visited:
+            stack = [node]
+            component = []
+            while stack:
+                current = stack.pop()
+                if current not in visited:
+                    visited.add(current)
+                    component.append(current)
+                    stack.extend(graph[current] - visited)
+            combined_lists.append(component)
+    
+    # Convert back to numpy arrays if needed
+    return [[point for point in component] for component in combined_lists]
+def closest(list, number):
+    '''
+    Finds closest element in a list to a given value.
+    Returns the index of that element.
+    '''
+    value = []
+    for i in list:
+        value.append(abs(number-i))
+    return value.index(min(value))
 
-    while start < len(segments):
-        end = start + 1
-        while end < len(segments): ### goes through adding the following black point and checks that is 30mins time difference from the last point, if so it will check error also, keeps extending the GR size
-            if end >= len(segments):
-                break
-            
-            comb_segs_data = df[abr + '_d'].loc[segments[start]:segments[end]]
-            time_difference = segments[end] - segments[end - 1]
-            if time_difference != timedelta(minutes=30): ### timedelta(minutes=5) -> timedelta(minutes=30)
-                break
-            
-            x_comb = np.arange(len(comb_segs_data))
-            y_comb = comb_segs_data.values
-            #print(comb_segs_data)
-            curve, popt = fit_curve(comb_segs_data)
-            y_fit = curve(x_comb, *popt)
-            erros_absolutos = np.abs(y_fit - y_comb)
-            mape = np.mean(erros_absolutos / y_comb) * 100
-            
-            if mape > mape_threshold:
-                break
-                       
-            end += 1
-              
-        if len (comb_segs_data) == 3 and mape > mape_threshold:
-            start = end - 1
-        else:           
-            combined_segments.append((segments[start], segments[min(end-1, len(segments)-1)]))
-            start = end 
-        
+def combine_segments_ver2(df):
+    '''
+    Finds nearby datapoints based on time and diameter constraints.
+    Fits linear curve to test if datapoints are close enough.
+    Returns lists with wanted times and diameters for plotting growth rates.
+    
+    Parameters:
+    times (list): List of time values.
+    diams (list): List of corresponding diameter values.
+    
+    Returns:
+    list: Combined lists of nearby datapoints.
+    ''' 
+    #extract times and diameters from df
+    times = df.index
+    diams = df['peak_diameter']
+    
+    #combine to the same list and sort data by diameter
+    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(0,1))) #[[time1,diam1],[time2,diam2]...]
 
-    return combined_segments
+    data_pairs = []
+    base_max_time_diff = timedelta(minutes=90) #max time difference in days = 90mins = 1,5h
+    higher_max_time_diff = timedelta(minutes=120) #120mins = 2h
+    
+    #iterate through each datapoint to find suitable pairs
+    for i, datapoint in enumerate(data_sorted):
+        for ii in range(1,len(data_sorted)-i):
+            try: #in case we reach the end with no "next datapoint"
+                next_datapoint = data_sorted[i+ii]
+                time0, diam0 = datapoint
+                time1, diam1 = next_datapoint
+                time_diff = abs(time1-time0)
+                diam_diff = abs(diam1-diam0)
+                
+                #diam difference in channels changes in a logarithmic scale, allow one empty channel in between
+                nextnext_diam = df1.columns[closest(df1.columns,diam0)+2] #diameter in the channel one after
+                max_diam_diff = abs(diam0-nextnext_diam) #max one diameter channel empty in between
+                
+                #at higher diameters allow longer time difference between starts
+                max_time_diff = higher_max_time_diff if diam0 >= 22 else base_max_time_diff
+                
+                if time_diff > max_time_diff: #if time difference is already too big break loop
+                    break
+                elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
+                    #sub_data.append(next_datapoint) #add next valid datapoint to the sublist
+                    data_pairs.append([datapoint,next_datapoint])
+                    break #next point found 
+                else: #keep looking for next datapoint until end of points if the next one isnt suitable
+                    continue
+            except IndexError:
+                continue
+    
+    #combine overlapping lists to create lists with nearby datapoints
+    combined = combine_connected_pairs(data_pairs)    
+    return combined
 ###
 
 ###################################################
+
+def linear(x,k,b): ###
+    return k*x + b
 
 def filter_segments(df, abr, combined_segments):
     filtered_segments = []
@@ -430,6 +522,40 @@ def filter_segments(df, abr, combined_segments):
                     filtered_segments.append(segment)
     return filtered_segments
 
+###
+def filter_segments_ver2(combined):
+    '''
+    Filter datapoints of lines that are too short or
+    with too big of an error.
+    '''
+    
+    #filter lines shorter than 4
+    combined = [subpoints for subpoints in combined if len(subpoints) >= 4]
+    
+    filtered_lines = []
+    for line in combined: 
+        while True:
+            try:
+                x = np.arange(len(line))
+                y = [datapoint[1] for datapoint in line] #diams
+                
+                popt, pcov = curve_fit(linear, x, y)
+                absolute_error = np.abs(linear(x, *popt) - y)
+                mape = np.mean(absolute_error / y) * 100
+
+                if mape <= 10: #maximum error 10%
+                    filtered_lines.append(line)
+                    #filtered_datapoints.append(removed_points)
+                    break
+                else:
+                    break
+
+            except:
+                print("Linear fit diverges.")
+    
+    return filtered_lines
+###
+
 ########################
 
 def process_data(df, abr):
@@ -447,6 +573,17 @@ def process_data(df, abr):
     results.append(filter_segs)    
  
     return df_subset, results
+
+###
+def process_data_ver2(df):
+
+    comb_segs = combine_segments_ver2(df)
+    print('Combined segments done! (1/2)')
+    filter_segs = filter_segments_ver2(comb_segs)
+    print('Filtering done! (2/2)')    
+ 
+    return filter_segs
+###
 
 def extract_data (df_subset, results, abr):   
     print('Extracting dataframe...')
@@ -527,37 +664,40 @@ def plot(*args):
 
 ############################################################################################
 
-abr1 = 'm1'
-print('\n'+'*********** Calculating GR for mode 1'+'\n')
-df_subset_m1, results_m1 = process_data(df_modes, abr1)
-df_GR_m1, segment_data_m1, fitted_curves_m1 = extract_data (df_subset_m1, results_m1, abr1)
-#print(df_GR_m1)      ###
+# abr1 = 'm1'
+# print('\n'+'*********** Calculating GR for mode 1'+'\n')
+# df_subset_m1, results_m1 = process_data(df_modes, abr1)
+# df_GR_m1, segment_data_m1, fitted_curves_m1 = extract_data (df_subset_m1, results_m1, abr1)
 
+#print(df_GR_m1)      ###
 #df_GR_m1.to_csv(r'C:\Users\unfer\Desktop\To_new_PC\PhD\Data\GR\GR_mode1_nucl_data_v3.csv',sep=',',header=True, index=True,na_rep='nan')
 #plot(abr1, df_GR_m1, segment_data_m1, fitted_curves_m1) # !!! Warning: make plots only for events or short dataset 
 
-abr2 = 'm2'
-print('\n'+'*********** Calculating GR for mode 2'+'\n')
-df_subset_m2, results_m2 = process_data(df_modes, abr2)
-df_GR_m2, segment_data_m2, fitted_curves_m2 = extract_data (df_subset_m2, results_m2, abr2)
+# abr2 = 'm2'
+# print('\n'+'*********** Calculating GR for mode 2'+'\n')
+# df_subset_m2, results_m2 = process_data(df_modes, abr2)
+# df_GR_m2, segment_data_m2, fitted_curves_m2 = extract_data (df_subset_m2, results_m2, abr2)
+
 #print(df_GR_m2)     ###
 # df_GR_m2.to_csv(r'C:\Users\unfer\Desktop\To_new_PC\PhD\Data\GR\GR_mode2_ait1_data.csv',sep=',',header=True, index=True,na_rep='nan')
 #plot(abr2, df_GR_m2, segment_data_m2, fitted_curves_m2) # !!! Warning: make plots only for events or short dataset
 #plot(abr1, df_GR_m1, segment_data_m1, fitted_curves_m1,abr2, df_GR_m2, segment_data_m2, fitted_curves_m2)
 
-abr3 = 'm3'
-print('\n'+'*********** Calculating GR for mode 3'+'\n')
-df_subset_m3, results_m3 = process_data(df_modes, abr3)
-df_GR_m3, segment_data_m3, fitted_curves_m3 = extract_data (df_subset_m3, results_m3, abr3)
+# abr3 = 'm3'
+# print('\n'+'*********** Calculating GR for mode 3'+'\n')
+# df_subset_m3, results_m3 = process_data(df_modes, abr3)
+# df_GR_m3, segment_data_m3, fitted_curves_m3 = extract_data (df_subset_m3, results_m3, abr3)
+
 #print(df_GR_m3)     ###
 #df_GR_m3.to_csv(r'C:\Users\unfer\Desktop\To_new_PC\PhD\Data\GR\GR_mode3_ait2_data.csv',sep=',',header=True, index=True,na_rep='nan')
 #plot(abr3, df_GR_m3, segment_data_m3, fitted_curves_m3) # !!! Warning: make plots only for events or short dataset
 #plot(abr1, df_GR_m1, segment_data_m1, fitted_curves_m1,abr2, df_GR_m2, segment_data_m2, fitted_curves_m2,abr3, df_GR_m3, segment_data_m3, fitted_curves_m3)
 
-abr4 = 'm4'
-print('\n'+'*********** Calculating GR for mode 4'+'\n')
-df_subset_m4, results_m4 = process_data(df_modes, abr4)
-df_GR_m4, segment_data_m4, fitted_curves_m4 = extract_data (df_subset_m4, results_m4, abr4)
+# abr4 = 'm4'
+# print('\n'+'*********** Calculating GR for mode 4'+'\n')
+# df_subset_m4, results_m4 = process_data(df_modes, abr4)
+# df_GR_m4, segment_data_m4, fitted_curves_m4 = extract_data (df_subset_m4, results_m4, abr4)
+
 #print(df_GR_m4)      ###
 #df_GR_m4.to_csv(r'C:\Users\unfer\Desktop\To_new_PC\PhD\Data\GR\GR_mode4_acc_data.csv',sep=',',header=True, index=True,na_rep='nan')
 #plot(abr4, df_GR_m4, segment_data_m4, fitted_curves_m4) # !!! Warning: make plots only for events or short dataset
@@ -566,6 +706,10 @@ df_GR_m4, segment_data_m4, fitted_curves_m4 = extract_data (df_subset_m4, result
 #       abr3, df_GR_m3, segment_data_m3, fitted_curves_m3,
 #       abr4, df_GR_m4, segment_data_m4, fitted_curves_m4)
 
+###
+print('\n'+'*********** Processing mode fitting data'+'\n')
+filter_segs = process_data_ver2(df_modefits) #data from Janne's code
+###
 
 ############################################################################################
 def drop_after_first_nan(df, column):
@@ -696,17 +840,11 @@ print('Checking modes 2 and 3...')
 df_all2, df_new3, df_del = process_data2(df_new2,'m2', df_GR_m3, 'm3', 5)
 df_all2.insert(0,'start',df_all2.index)
 df_all2 = df_all2.reset_index(drop=True)
-print(df_all2)
-print("df_GR_m2",df_GR_m2)
-print("df_GR_m3",df_GR_m3)
-print("df_new3",df_new3)
-print("df_del",df_del)
 
 print('Checking modes 3 and 4...')
 df_all3, _, df_del = process_data2(df_new3,'m3', df_GR_m4, 'm4', 10)
 df_all3.insert(0,'start',df_all3.index)
 df_all3 = df_all3.reset_index(drop=True)
-print(df_all3)
 
 
 ###################
@@ -754,8 +892,6 @@ def plot2(df):
     cbar = plt.colorbar(orientation='vertical', shrink=0.8, extend="max", pad=0.04)
     cbar.set_label('dN/dlogDp', size=14)
     cbar.ax.tick_params(labelsize=12)
-    #print("df_modes 2:",df_modes) ###
-    
     
     plt.plot(df_modes.index, df_modes['m1_d'], '*', alpha=0.5, color='black', markersize=5, label='mode fitting') ###ADDED label='mode fitting'
     plt.plot(df_modes.index, df_modes['m2_d'], '*', alpha=0.5, color='black', markersize=5)
@@ -819,11 +955,56 @@ def plot2(df):
         plt.annotate(f'{slope} nm/h', (midpoint_time, midpoint_value), 
                      textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold') ### xytext=(0, 10) -> xytext=(0, 7) & fontsize=8 -> fontsize=5   
       
-    #plt.show() ###
+    #plt.show() ###commented away
     return ax ###added to use ax in my code
+
+def plot2_ver2(filter_segs):
+    fig, ax = plt.subplots(figsize=(14, 5), dpi=200) ### figsize=(12, 3), dpi=300 -> figsize=(12, 5), dpi=200
+
+    #colormap
+    x = df1.index[0:]
+    y = df1.columns.astype(float)
+    plt.pcolormesh(x, y, df1[0:].T, cmap='RdYlBu_r', zorder=0, norm=colors.LogNorm(vmin=1e1, vmax=1e4))
+    ax.set_yscale('log')
+    cbar = plt.colorbar(orientation='vertical', shrink=0.8, extend="max", pad=0.04)
+    cbar.set_label('dN/dlogDp', size=14)
+    cbar.ax.tick_params(labelsize=12)
     
-ax = plot2(df_GR_final) ###
-#modefit_points = plot2(df_GR_final) ###added to save curvefit values 
+    #modefit points (as black stars)
+    time = df_modefits.index
+    diam = df_modefits['peak_diameter']
+    plt.plot(time,diam,'*', alpha=0.5, color='black', markersize=5, label='mode fitting')
+    
+    #growth rates
+    '''
+    y = time in days
+    x = diameters in nm
+    Flipped as the error is in time.
+    '''    
+    #linear least square fits
+    time = [[seg[0] for seg in segment] for segment in filter_segs] #time
+    diam = [[seg[1] for seg in segment] for segment in filter_segs] #diam
+    
+    print("time",time)
+    print("diam",diam)
+    
+    for i in range(len(time)):
+        x = np.arange(len(time[i])) #time
+        params, pcov = curve_fit(linear, x, diam[i])
+        gr = params[0]*2 #unit to nm/h from nm/0.5h (due to how x is defined)
+        diam_fit = params[0]*x + params[1]
+
+        plt.plot(time[i],diam_fit,lw=3) #line
+        
+        midpoint_idx = len(time[i]) // 2 #growth rate value
+        midpoint_time = time[i][midpoint_idx]
+        midpoint_value = diam_fit[midpoint_idx]
+        plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
+        
+    return ax
+
+#ax = plot2(df_GR_final) ### 
+ax = plot2_ver2(filter_segs) ### 
 df_GR_final.to_csv('./Gr_final.csv', sep=',', header=True, index=True, na_rep='nan')
 
 
