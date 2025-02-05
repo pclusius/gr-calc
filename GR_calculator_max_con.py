@@ -287,8 +287,8 @@ def find_ranges():
     '''
     
     #pidennä ikkunaa kun loivempi??
-    df_GR_values = pd.DataFrame(pd.read_csv("./Gr_final.csv",sep=',',engine='python')) #open calculated values in Gabi's code
-    threshold = 0 #GR [nm/h]
+    df_GR_values = df_GR_final #open calculated values in Gabi's code
+    threshold = 0 #GR [nm/h], all growth rates
 
     df_ranges = []
     growth_rates =[]
@@ -310,8 +310,8 @@ def find_ranges():
                 end_diam = row["d_final"]
             
             #make the ranges bigger with given parameters
-            start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S") - timedelta(hours=5) #5 hours
-            end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S") + timedelta(hours=5)
+            start_time = start_time - timedelta(hours=5) #5 hours
+            end_time = end_time + timedelta(hours=5)
             
             start_diam = start_diam / 1.5 #factor of 1.5
             end_diam = end_diam * 1.5
@@ -642,7 +642,7 @@ xyz_appear, x_appear_days = filter_duplicates(xyz_appear,x_appear_days)
 
 #################### GR DATA ######################
 
-def robust_fit(time,diam):
+def robust_fit(time,diam,color):
     """
     Args:
         time (_type_): _description_
@@ -687,7 +687,7 @@ def robust_fit(time,diam):
     #plt.plot(time_UTC_ransac,diam_linear,color="cornflowerblue",linewidth=lw,label="RANSAC regressor")
     #plt.plot(time_UTC_linear, diam_linear, color="navy", linewidth=lw)
     #plt.plot(time_UTC_ransac, diam_linear,color="red",linewidth=lw)
-    plt.plot(time_UTC_rlm, diam_linear,color="orange",linewidth=lw)
+    plt.plot(time_UTC_rlm, diam_linear,color=color,linewidth=lw)
     
     #growth rate annotation
     gr = 1/(t_params[1]*24) #unit to nm/h from time in days
@@ -701,7 +701,7 @@ def robust_fit(time,diam):
     #print("\nparameters: ",rlm_results.params)
     #print(help(sm.RLM.fit))
 
-def find_dots(times,diams):
+def find_dots_old(times,diams):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
@@ -751,12 +751,101 @@ def find_dots(times,diams):
     #combine overlapping lists to create lists with nearby datapoints
     combined = combine_connected_pairs(data_pairs)          
     return combined
+def find_dots(times,diams):
+    '''
+    Finds nearby datapoints based on time and diameter constraints.
+    Fits linear curve to test if datapoints are close enough.
+    Returns lists with wanted times and diameters for plotting growth rates.
+    
+    Parameters:
+    times (list): List of time values.
+    diams (list): List of corresponding diameter values.
+    
+    Returns:
+    list: Combined lists of nearby datapoints.
+    ''' 
+    #combine to the same list and sort data by diameter
+    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1))) #[[time1,diam1],[time2,diam2]...]
+    
+    data_pairs = []
+    base_max_time_diff = 90/(60*24) #max time difference in days = 90mins = 1,5h
+    higher_max_time_diff = 120/(60*24) #120mins = 2h
+    
+    #iterate through each datapoint to find suitable pairs of mode fitting datapoints
+    for i, datapoint in enumerate(data_sorted):
+        for ii in range(1,len(data_sorted)-i):
+            try: #in case we reach the end with no "next datapoint"
+                next_datapoint = data_sorted[i+ii] #always after current datapoint
+                time0, diam0 = datapoint
+                time1, diam1 = next_datapoint
+                time_diff = abs(time1-time0)
+                diam_diff = abs(diam1-diam0)
+                
+                #diam difference in channels changes in a logarithmic scale, allow one empty channel in between
+                nextnext_diam = df.columns.values[df.columns.values > diam0][1] #diameter in the channel one after
+                next_diam = df.columns.values[df.columns.values > diam0][0]
+                max_diam_diff = abs(next_diam-nextnext_diam) #max one diameter channel empty in between
+                
+                #at higher diameters allow longer time difference between starts
+                max_time_diff = higher_max_time_diff if diam0 >= 22 else base_max_time_diff
+
+                if diam_diff > max_diam_diff: #if diam difference is already too big break loop
+                    break
+                elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
+                    data_pairs.append([datapoint,next_datapoint]) #add nearby datapoint pairs to list
+                    combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+                    
+                    #make a linear fit to check mape in each line of datapoints
+                    for iii, line in enumerate(combined):
+                        x = np.arange(len(line)) #diams
+                        y = [datapoint[0] for datapoint in line] #times
+                        
+                        if len(x) == 1: #fitting curve wont work with only 1 datapoint
+                            continue
+                        
+                        popt, pcov = curve_fit(linear, x, y)
+                        absolute_error = np.abs(linear(x, *popt) - y)
+                        mape = np.mean(absolute_error / y) * 100
+
+                        #mape is not the same in different scales so here the threshold must be stricter
+                        #allow mape of 5% when there are only 3 datapoints, otherwise 4%
+                        mape_threshold = 0.025 if len(line) <= 3 else 0.02
+                        
+                        if mape > mape_threshold:
+                            #calculate mape without first datapoint of line to see if mape is smaller
+                            x = np.arange(len(line[1:]))
+                            y = [datapoint[0] for datapoint in line[1:]] #diams of line
+                            popt, pcov = curve_fit(linear, x, y)
+                            absolute_error = np.abs(linear(x, *popt) - y)
+                            mape = np.mean(absolute_error / y) * 100
+                            
+                            if mape > mape_threshold: #if mape is still too big
+                                #delete recently added datapoint from both lists
+                                combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
+                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
+                            else:
+                                #remove the first datapoint of the line
+                                first_datapoint = line[0]
+                                combined[iii] = line[1:]
+                                #remove also data pair with this datapoint
+                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
+                            
+                    break
+                else: #keep looking for next datapoint until end of points if the next one isnt suitable
+                    continue
+            except IndexError:
+                print("INDEX ERROR")
+                continue
+    
+    combined = [sorted(component, key=lambda x: x[0]) for component in combined] # Sort each individual component by timestamp
+    
+    return combined
+
 def filter_dots(datapoints):
     '''
     Filter datapoints of lines that are too short or
     with too big of an error.
     '''
-    
     #check length of datapoints for each line
     datapoints = [subpoints for subpoints in datapoints if len(subpoints) >= 4] #length of at least 4 datapoints
     
@@ -764,33 +853,30 @@ def filter_dots(datapoints):
     filtered_datapoints = []
     for line in datapoints:
         i = 1
-        
-        removed_points = []
         while True:
             try:
                 x = np.arange(len(line)) #diams
                 y = [time[0] for time in line] #time as y
-                y = y - time_d[0]
                 
                 popt, pcov = curve_fit(linear, x, y)
                 absolute_error = np.abs(linear(x, *popt) - y)
+                #print("linear(x, *popt) - y",linear(x, *popt),"-",y)
                 mape = np.mean(absolute_error / y) * 100
+                GR = 1/(popt[0]*24) #growth rate
 
-                if mape <= 20: #maximum error 4%
+                #mape is not the same in different scales so here the threshold must be stricter
+                #maximum mape 1% and GR is not bigger than +-10nm/h
+                if mape <= 1 and abs(GR) <= 10:
                     filtered_datapoints.append(line)
-                    #filtered_datapoints.append(removed_points)
                     break
                 else:
-                    line = line[:-i] #exclude last elements one by one
-                    i += 1
+                    break
+                #else:
+                #    line = line[:-i] #exclude last elements one by one
+                #    i += 1
                     #print("deleted",line[-1])
                     #removed_points.append(line[-1])    #add removed datapoint to another list
-                    
-                
-                
-                #MORE CONDITIONS HERE
-                #robust fit
-                    
+ 
             except:
                 print("Linear fit diverges.")
 
@@ -899,14 +985,14 @@ def plot_PSD(dataframe):
     plt.plot(xyz_appear[0], xyz_appear[1], '*', alpha=0.5, color='green', ms=5,label='appearance time')
     
     #growth rates
-    '''
+    
     time_mc, diam_mc, time_at, diam_at = init_find()
     for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
         #linear_fit(time_seg_mc, diam_seg_mc) #maximum concentration
         #linear_fit(time_seg_at, diam_seg_at) #appearance time
-        robust_fit(time_seg_at, diam_seg_at)
-        robust_fit(time_seg_mc, diam_seg_mc)
-    '''
+        robust_fit(time_seg_at, diam_seg_at,"green")
+        robust_fit(time_seg_mc, diam_seg_mc,"white")
+    
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
     for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
@@ -1220,7 +1306,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     green_star2.set_markeredgecolor("black")
     
     fig.tight_layout()
-plot_channel(df,[df.columns[7],df.columns[8]],choose_GR=None,draw_range_edges=True)
+#plot_channel(df,[df.columns[7],df.columns[8]],choose_GR=None,draw_range_edges=True)
 
 plt.show()
 
