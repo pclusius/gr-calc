@@ -70,12 +70,12 @@ def input_data():
     return file_names,modefit_names
 file_names, modefit_names = input_data()
 """
-file_names = ["dm160612.sum"]
-#file_names = ["dm160410.sum","dm160411.sum","dm160412.sum"]
+#file_names = ["dm160612.sum"]
+file_names = ["dm160410.sum","dm160411.sum","dm160412.sum"]
 #file_names = ["dm160410.sum","dm160411.sum"]
 #file_names = ["dm160426.sum","dm160427.sum","dm160428.sum"]
-modefit_names = ["output_modefit_2016_06_12.csv"]
-#modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv","output_modefit_2016_04_12.csv"]
+#modefit_names = ["output_modefit_2016_06_12.csv"]
+modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv","output_modefit_2016_04_12.csv"]
 #modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv"]
 #modefit_names = ["output_modefit_2016_04_26.csv","output_modefit_2016_04_27.csv","output_modefit_2016_04_28.csv"]
 
@@ -200,7 +200,7 @@ df4 = df4.astype(float)
 ##############################################################
 ###LOADING A JSON FILE
 
-with open("12062016_mode_fits.json") as file:
+with open("10_12042016_mode_fits.json") as file:
     mode_fits = json.load(file)
 
 #processing modefitting data
@@ -358,8 +358,7 @@ def find_segments(df,abr):
     return segments    
 
 ##################################################
-#mitä pidempi suora on tai mitä enemmän pisteitä löytyy sitä enemmän vaihtelua mape sallii myöhemmin
-#riippuen datapisteiden määrästä mape muuttuu, mape N:n funktiona, alussa mape isompi, myöhemmin pienempi
+
 def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 -> mape_threshold=5
     combined_segments = []
     start = 0
@@ -388,7 +387,7 @@ def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 
                        
             end += 1
               
-        if len (comb_segs_data) == 3 and mape > mape_threshold: ### if there with three black dots mape is too big drop the first black dot, start becomes the dot after
+        if len (comb_segs_data) == 3 and mape > mape_threshold: ### if with three black dots mape is too big drop the first black dot, start becomes the dot after
             start = end-1
         else:           
             combined_segments.append((segments[start], segments[min(end-1, len(segments)-1)]))
@@ -396,9 +395,9 @@ def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 
         
     return combined_segments
 
-###################################################
-
-### ADDED NEW WAY TO COMBINE SEGMENTS I.E TIMESTAMPS
+###
+#mitä pidempi suora on tai mitä enemmän pisteitä löytyy sitä enemmän vaihtelua mape sallii myöhemmin
+#riippuen datapisteiden määrästä mape muuttuu, mape N:n funktiona, alussa mape isompi, myöhemmin pienempi
 #YHDISTÄ KAIKKI MOODIT ENSIN YHTEEN
 #ETSI AINA AIKASTEPPI KERRALLAAN +-10nm VÄLILLÄ SEURAAVA PISTE, MOODIEN VÄLISSÄ +- VOI OLLA LAAJEMPI (15nm?)
 def combine_connected_pairs(list):
@@ -460,16 +459,17 @@ def combine_segments_ver2(df):
     
     #combine to the same list and sort data by diameter
     data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(0,1))) #[[time1,diam1],[time2,diam2]...]
-
+    
     data_pairs = []
     base_max_time_diff = timedelta(minutes=90) #max time difference in days = 90mins = 1,5h
     higher_max_time_diff = timedelta(minutes=120) #120mins = 2h
     
-    #iterate through each datapoint to find suitable pairs
+    #iterate through each datapoint to find suitable pairs of mode fitting datapoints
     for i, datapoint in enumerate(data_sorted):
         for ii in range(1,len(data_sorted)-i):
+            #print(i,ii)
             try: #in case we reach the end with no "next datapoint"
-                next_datapoint = data_sorted[i+ii]
+                next_datapoint = data_sorted[i+ii] #always after current datapoint
                 time0, diam0 = datapoint
                 time1, diam1 = next_datapoint
                 time_diff = abs(time1-time0)
@@ -477,24 +477,60 @@ def combine_segments_ver2(df):
                 
                 #diam difference in channels changes in a logarithmic scale, allow one empty channel in between
                 nextnext_diam = df1.columns[closest(df1.columns,diam0)+2] #diameter in the channel one after
-                max_diam_diff = abs(diam0-nextnext_diam) #max one diameter channel empty in between
+                max_diam_diff = abs(df1.columns[closest(df1.columns,diam0)]-nextnext_diam) #max one diameter channel empty in between
                 
                 #at higher diameters allow longer time difference between starts
                 max_time_diff = higher_max_time_diff if diam0 >= 22 else base_max_time_diff
-                
+
                 if time_diff > max_time_diff: #if time difference is already too big break loop
                     break
                 elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
-                    #sub_data.append(next_datapoint) #add next valid datapoint to the sublist
-                    data_pairs.append([datapoint,next_datapoint])
-                    break #next point found 
+                    data_pairs.append([datapoint,next_datapoint]) #add nearby datapoint pairs to list
+                    combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+                    
+                    #make a linear fit to check mape in each line of datapoints
+                    for iii, line in enumerate(combined):
+                        x = np.arange(len(line))
+                        y = [datapoint[1] for datapoint in line] #diams of line
+                        
+                        if len(x) == 1: #fitting curve wont work with only 1 datapoint
+                            continue
+                            
+                        popt, pcov = curve_fit(linear, x, y)
+                        absolute_error = np.abs(linear(x, *popt) - y)
+                        mape = np.mean(absolute_error / y) * 100
+
+                        #allow mape of 5% when there are only 3 datapoints, otherwise 4%
+                        mape_threshold = 5 if len(line) <= 3 else 4
+                        
+                        if mape > mape_threshold:
+                            #calculate mape without first datapoint of line to see if mape is smaller
+                            x = np.arange(len(line[1:]))
+                            y = [datapoint[1] for datapoint in line[1:]] #diams of line
+                            popt, pcov = curve_fit(linear, x, y)
+                            absolute_error = np.abs(linear(x, *popt) - y)
+                            mape = np.mean(absolute_error / y) * 100
+                            
+                            if mape > mape_threshold: #if mape is still too big
+                                #delete recently added datapoint from both lists
+                                combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
+                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
+                            else:
+                                #remove the first datapoint of the line
+                                first_datapoint = line[0]
+                                combined[iii] = line[1:]
+                                #remove also data pair with this datapoint
+                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
+                            
+                    break
                 else: #keep looking for next datapoint until end of points if the next one isnt suitable
                     continue
             except IndexError:
+                print("INDEX ERROR")
                 continue
     
-    #combine overlapping lists to create lists with nearby datapoints
-    combined = combine_connected_pairs(data_pairs)    
+    combined = [sorted(component, key=lambda x: x[0]) for component in combined] # Sort each individual component by timestamp
+    
     return combined
 ###
 
@@ -542,10 +578,11 @@ def filter_segments_ver2(combined):
                 popt, pcov = curve_fit(linear, x, y)
                 absolute_error = np.abs(linear(x, *popt) - y)
                 mape = np.mean(absolute_error / y) * 100
+                GR = popt[0] * 2
 
-                if mape <= 10: #maximum error 10%
+                #maximum error 10% and GR is not bigger than +-10nm/h
+                if mape <= 10 and abs(GR) <= 10:
                     filtered_lines.append(line)
-                    #filtered_datapoints.append(removed_points)
                     break
                 else:
                     break
@@ -719,7 +756,6 @@ def drop_after_first_nan(df, column):
         return df.loc[:first_nan_index].iloc[:-1]
     return df
 
-#YRITÄ YMMÄRTÄÄ MITEN TÄÄ TOIMII ELI MITEN YHDISTETÄÄN MOODEJA
 def process_data2(dfA, m1, dfB, m2, diameter_diff):
     lista = []
     listaA_del = []
@@ -741,9 +777,9 @@ def process_data2(dfA, m1, dfB, m2, diameter_diff):
             
             if (dfB['d_initial'].iloc[idx_position] - dfA['d_final'].iloc[j]) < diameter_diff: ###Checks if the GR of the previous mode is close enough with the GR in the current mode
             
-                start2 = dfB.index[idx_position]       # !!! KATO TÄÄ
+                start2 = dfB.index[idx_position]       # !!!
                 end2 = dfB['end'].iloc[idx_position]
-                df_m2 = df_modes.loc[start2:end2, [m2+'_A', m2+'_d', m2+'_s']] # TÄÄÄ
+                df_m2 = df_modes.loc[start2:end2, [m2+'_A', m2+'_d', m2+'_s']]
                 df_m2.columns = ['m_A', 'm_d', 'm_s']
                          
                 df_comb1 = pd.concat([df_m1, df_m2], axis=0)
@@ -831,53 +867,53 @@ def process_data2(dfA, m1, dfB, m2, diameter_diff):
     return df_all, df_new, df_comb_all
 
 ###############################################################################
-print('Checking modes 1 and 2...')
-df_all1, df_new2, df_del = process_data2(df_GR_m1,'m1', df_GR_m2, 'm2', 3)
-df_all1.insert(0,'start',df_all1.index)
-df_all1 = df_all1.reset_index(drop=True)
+# print('Checking modes 1 and 2...')
+# df_all1, df_new2, df_del = process_data2(df_GR_m1,'m1', df_GR_m2, 'm2', 3)
+# df_all1.insert(0,'start',df_all1.index)
+# df_all1 = df_all1.reset_index(drop=True)
 
-print('Checking modes 2 and 3...')
-df_all2, df_new3, df_del = process_data2(df_new2,'m2', df_GR_m3, 'm3', 5)
-df_all2.insert(0,'start',df_all2.index)
-df_all2 = df_all2.reset_index(drop=True)
+# print('Checking modes 2 and 3...')
+# df_all2, df_new3, df_del = process_data2(df_new2,'m2', df_GR_m3, 'm3', 5)
+# df_all2.insert(0,'start',df_all2.index)
+# df_all2 = df_all2.reset_index(drop=True)
 
-print('Checking modes 3 and 4...')
-df_all3, _, df_del = process_data2(df_new3,'m3', df_GR_m4, 'm4', 10)
-df_all3.insert(0,'start',df_all3.index)
-df_all3 = df_all3.reset_index(drop=True)
-
-
-###################
-
-df_all1_m2 = df_all1[df_all1['mode'] == 'm2']
-df_all2_m2 = df_all2[df_all2['mode'] == 'm2']
-
-# Identify the rows in df_all1_m2 that are not present in df_all2_m2
-to_remove = df_all1_m2[~df_all1_m2.apply(tuple, axis=1).isin(df_all2_m2.apply(tuple, axis=1))]
-# Delete the identified rows from df_all1
-df_all1_filtered = df_all1.drop(to_remove.index)
-
-###
-
-df_all2_m3 = df_all2[df_all2['mode'] == 'm3']
-df_all3_m3 = df_all3[df_all3['mode'] == 'm3']
-
-# Identify the rows in df_all2_m3 that are not present in df_all3_m3
-to_remove = df_all2_m3[~df_all2_m3.apply(tuple, axis=1).isin(df_all3_m3.apply(tuple, axis=1))]
-# Delete the identified rows from df_all2
-df_all2_filtered = df_all2.drop(to_remove.index)
+# print('Checking modes 3 and 4...')
+# df_all3, _, df_del = process_data2(df_new3,'m3', df_GR_m4, 'm4', 10)
+# df_all3.insert(0,'start',df_all3.index)
+# df_all3 = df_all3.reset_index(drop=True)
 
 
 ###################
 
-df_GR_final = pd.concat([df_all1_filtered,df_all2_filtered,df_all3],axis=0,ignore_index=True)
-df_GR_final = df_GR_final.drop_duplicates()
-df_GR_final.index = df_GR_final['start']
-df_GR_final = df_GR_final.drop(columns=['start'])
-df_GR_final = df_GR_final.sort_index()
+# df_all1_m2 = df_all1[df_all1['mode'] == 'm2']
+# df_all2_m2 = df_all2[df_all2['mode'] == 'm2']
 
-print(df_GR_final)
-#df_GR_final.to_csv(r'C:\Users\unfer\Desktop\To_new_PC\PhD\Data\GR\GR_allmodes.csv',sep=',',header=True, index=True,na_rep='nan')
+# # Identify the rows in df_all1_m2 that are not present in df_all2_m2
+# to_remove = df_all1_m2[~df_all1_m2.apply(tuple, axis=1).isin(df_all2_m2.apply(tuple, axis=1))]
+# # Delete the identified rows from df_all1
+# df_all1_filtered = df_all1.drop(to_remove.index)
+
+# ###
+
+# df_all2_m3 = df_all2[df_all2['mode'] == 'm3']
+# df_all3_m3 = df_all3[df_all3['mode'] == 'm3']
+
+# # Identify the rows in df_all2_m3 that are not present in df_all3_m3
+# to_remove = df_all2_m3[~df_all2_m3.apply(tuple, axis=1).isin(df_all3_m3.apply(tuple, axis=1))]
+# # Delete the identified rows from df_all2
+# df_all2_filtered = df_all2.drop(to_remove.index)
+
+
+###################
+
+# df_GR_final = pd.concat([df_all1_filtered,df_all2_filtered,df_all3],axis=0,ignore_index=True)
+# df_GR_final = df_GR_final.drop_duplicates()
+# df_GR_final.index = df_GR_final['start']
+# df_GR_final = df_GR_final.drop(columns=['start'])
+# df_GR_final = df_GR_final.sort_index()
+
+# print(df_GR_final)
+# #df_GR_final.to_csv(r'C:\Users\unfer\Desktop\To_new_PC\PhD\Data\GR\GR_allmodes.csv',sep=',',header=True, index=True,na_rep='nan')
 
 
 ###############################################################################
@@ -982,30 +1018,30 @@ def plot2_ver2(filter_segs):
     Flipped as the error is in time.
     '''    
     #linear least square fits
-    time = [[seg[0] for seg in segment] for segment in filter_segs] #time
-    diam = [[seg[1] for seg in segment] for segment in filter_segs] #diam
+    time = [[seg[0] for seg in segment] for segment in filter_segs]
+    diam = [[seg[1] for seg in segment] for segment in filter_segs]
     
-    print("time",time)
-    print("diam",diam)
-    
+    df_GR_final = pd.DataFrame(columns=['start','end','d_initial','d_final','GR'])
     for i in range(len(time)):
         x = np.arange(len(time[i])) #time
         params, pcov = curve_fit(linear, x, diam[i])
         gr = params[0]*2 #unit to nm/h from nm/0.5h (due to how x is defined)
         diam_fit = params[0]*x + params[1]
-
         plt.plot(time[i],diam_fit,lw=3) #line
         
         midpoint_idx = len(time[i]) // 2 #growth rate value
         midpoint_time = time[i][midpoint_idx]
         midpoint_value = diam_fit[midpoint_idx]
         plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
-        
-    return ax
+
+        #save values to df for later use
+        df_GR_final.loc[i] = [time[i][0],time[i][-1],diam[i][0],diam[i][-1],gr]
+    
+    return ax, df_GR_final
 
 #ax = plot2(df_GR_final) ### 
-ax = plot2_ver2(filter_segs) ### 
-df_GR_final.to_csv('./Gr_final.csv', sep=',', header=True, index=True, na_rep='nan')
+ax, df_GR_final = plot2_ver2(filter_segs) ### 
+#df_GR_final.to_csv('./Gr_final.csv', sep=',', header=True, index=True, na_rep='nan')
 
 
 
