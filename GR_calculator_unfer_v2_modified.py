@@ -439,6 +439,11 @@ def closest(list, number):
     for i in list:
         value.append(abs(number-i))
     return value.index(min(value))
+def cal_mape(x,y):
+    popt, pcov = curve_fit(linear, x, y)
+    absolute_error = np.abs(linear(x, *popt) - y)
+    mape = np.mean(absolute_error / y) * 100
+    return popt,mape
 
 def combine_segments_ver2(df):
     '''
@@ -467,66 +472,98 @@ def combine_segments_ver2(df):
     #iterate through each datapoint to find suitable pairs of mode fitting datapoints
     for i, datapoint in enumerate(data_sorted):
         for ii in range(1,len(data_sorted)-i):
-            #print(i,ii)
-            try: #in case we reach the end with no "next datapoint"
-                next_datapoint = data_sorted[i+ii] #always after current datapoint
-                time0, diam0 = datapoint
-                time1, diam1 = next_datapoint
-                time_diff = abs(time1-time0)
-                diam_diff = abs(diam1-diam0)
-                
-                #diam difference in channels changes in a logarithmic scale, allow one empty channel in between
-                nextnext_diam = df1.columns[closest(df1.columns,diam0)+2] #diameter in the channel one after
-                max_diam_diff = abs(df1.columns[closest(df1.columns,diam0)]-nextnext_diam) #max one diameter channel empty in between
-                
-                #at higher diameters allow longer time difference between starts
-                max_time_diff = higher_max_time_diff if diam0 >= 22 else base_max_time_diff
+            print(i,ii)
+            next_datapoint = data_sorted[i+ii] #always after current datapoint
+            time0, diam0 = datapoint
+            time1, diam1 = next_datapoint
+            time_diff = abs(time1-time0)
+            diam_diff = abs(diam1-diam0)
+            
+            #diam difference in channels changes in a logarithmic scale
+            nextnext_diam = df1.columns[closest(df1.columns,diam0)+2] #diameter in the channel one after
+            max_diam_diff = abs(df1.columns[closest(df1.columns,diam0)]-nextnext_diam) #max one diameter channel empty in between
+            
+            #at higher diameters allow longer time difference between stars
+            max_time_diff = higher_max_time_diff if diam0 >= 22 else base_max_time_diff
 
-                if time_diff > max_time_diff: #if time difference is already too big break loop
-                    break
-                elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
-                    data_pairs.append([datapoint,next_datapoint]) #add nearby datapoint pairs to list
-                    combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+            if time_diff > max_time_diff: #if time difference is already too big break loop
+                break
+            elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
+                data_pairs.append([datapoint,next_datapoint]) #add nearby datapoint pairs to list
+                combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+                combined_list = combined #now when we modify combined it wont affect the for loop
+                
+                if i < 30:
+                    print([datapoint,next_datapoint])
+                    print(combined)
+                
+                #make a linear fit to check mape in each line of datapoints
+                for iii, line in enumerate(combined_list):
+                    if len(line) <= 2: #pointless to analyze mape with less than 3 datapoints
+                        continue #proceed to next line
                     
-                    #make a linear fit to check mape in each line of datapoints
-                    for iii, line in enumerate(combined):
-                        x = np.arange(len(line))
-                        y = [datapoint[1] for datapoint in line] #diams of line
-                        
-                        if len(x) == 1: #fitting curve wont work with only 1 datapoint
-                            continue
-                            
-                        popt, pcov = curve_fit(linear, x, y)
-                        absolute_error = np.abs(linear(x, *popt) - y)
-                        mape = np.mean(absolute_error / y) * 100
+                    x = np.arange(len(line))
+                    y = [datapoint[1] for datapoint in line] #diams
+                    popt, mape = cal_mape(x,y)
 
-                        #allow mape of 5% when there are only 3 datapoints, otherwise 4%
-                        mape_threshold = 5 if len(line) <= 3 else 4
+                    #mape threshold linearly gets stricter until 5 datapoints
+                    #with 5 or more points threshold is 3% and with 3 points 5%
+                    mape_threshold = -1*len(line)+8 if len(line) < 5 else 3.2
+                    
+                    if i < 30:
+                        print(mape, "threshold",mape_threshold)
+                    
+                    if mape > mape_threshold:
+                        #calculate mape without first datapoint of line to see if mape is smaller
+                        x = np.arange(len(line[1:]))
+                        y = [datapoint[1] for datapoint in line[1:]] #diams
+                        popt, mape = cal_mape(x,y)
                         
-                        if mape > mape_threshold:
-                            #calculate mape without first datapoint of line to see if mape is smaller
-                            x = np.arange(len(line[1:]))
-                            y = [datapoint[1] for datapoint in line[1:]] #diams of line
-                            popt, pcov = curve_fit(linear, x, y)
-                            absolute_error = np.abs(linear(x, *popt) - y)
-                            mape = np.mean(absolute_error / y) * 100
+                        if mape > mape_threshold: #if mape is still too big
+                            #delete recently added datapoint from both lists
+                            combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
+                            data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)]
                             
-                            if mape > mape_threshold: #if mape is still too big
-                                #delete recently added datapoint from both lists
-                                combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
-                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
-                            else:
-                                #remove the first datapoint of the line
-                                first_datapoint = line[0]
-                                combined[iii] = line[1:]
-                                #remove also data pair with this datapoint
-                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
-                            
-                    break
-                else: #keep looking for next datapoint until end of points if the next one isnt suitable
-                    continue
-            except IndexError:
-                print("INDEX ERROR")
+                            x = np.arange(len(line[:-2]))
+                            y = [datapoint[1] for datapoint in line[:-2]] #diams
+                            popt, mape = cal_mape(x,y) #update mape value
+                        else:
+                            pass
+                            #remove the first datapoint of the line
+                            #first_datapoint = line[0]
+                            #combined[iii] = line[1:]
+                            #remove also data pair with this datapoint
+                            #data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
+                    
+                    
+                    #try splitting line into two parts from the middle to lower mape
+                    if len(combined[iii]) >= 8: #at least 8 datapoints needed
+                        middle_index = int(len(combined[iii])/2) #rounding down with int()
+                        line_1st_half = combined[iii][:middle_index]
+                        #uneven numbers include one more element in the 2nd half
+                        line_2nd_half = combined[iii][-middle_index:] if len(combined[iii])%2 == 0 else combined[iii][-(middle_index+1):]
+
+                        #calculate if mape lowered significantly
+                        x = np.arange(len(line_1st_half))
+                        y = [datapoint[1] for datapoint in line_1st_half] #diams
+                        popt, mape1 = cal_mape(x,y)
+                        
+                        x = np.arange(len(line_2nd_half))
+                        y = [datapoint[1] for datapoint in line_2nd_half]
+                        popt, mape2 = cal_mape(x,y)
+                        
+                        #relative change in mape
+                        rel_diff1 = ((mape1-mape)/mape) * 100
+                        rel_diff2 = ((mape2-mape)/mape) * 100
+                        
+                        #if mape improves (decreases) by 30% split line in two
+                        if rel_diff1 <= 30 and rel_diff2 <= 30:
+                            #remove the first half of current line and add it as its own line
+                            combined[iii] = line_1st_half
+                            combined.append(line_2nd_half)
+                
+                break
+            else: #keep looking for next datapoint until end of points if the next one isnt suitable
                 continue
     
     combined = [sorted(component, key=lambda x: x[0]) for component in combined] # Sort each individual component by timestamp
@@ -581,7 +618,7 @@ def filter_segments_ver2(combined):
                 GR = popt[0] * 2
 
                 #maximum error 10% and GR is not bigger than +-10nm/h
-                if mape <= 10 and abs(GR) <= 10:
+                if mape <= 10 and abs(GR) <= 1000:
                     filtered_lines.append(line)
                     break
                 else:
@@ -1032,7 +1069,7 @@ def plot2_ver2(filter_segs):
         midpoint_idx = len(time[i]) // 2 #growth rate value
         midpoint_time = time[i][midpoint_idx]
         midpoint_value = diam_fit[midpoint_idx]
-        plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
+        plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7, fontweight='bold')
 
         #save values to df for later use
         df_GR_final.loc[i] = [time[i][0],time[i][-1],diam[i][0],diam[i][-1],gr]
