@@ -5,6 +5,7 @@ import datetime
 from datetime import timedelta
 from datetime import datetime
 from scipy.optimize import curve_fit
+from scipy import interpolate
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.use("Qt5Agg") #backend changes the plotting style
@@ -14,6 +15,7 @@ from collections import defaultdict
 import statsmodels.api as sm
 from sklearn import linear_model
 from itertools import cycle
+from adjustText import adjust_text
 
 '''
 This code assumes dmps data.
@@ -192,6 +194,13 @@ def combine_connected_pairs(list):
     
     # Convert back to numpy arrays if needed
     return [[point for point in component] for component in combined_lists]
+def cal_mape(x,y):
+    x = np.array(x)
+    y = np.array(y)
+    popt, pcov = curve_fit(linear, x, y)
+    absolute_error = np.abs(linear(x, *popt) - y)
+    mape = np.mean(absolute_error / y) * 100
+    return popt,mape
 
 #define mathematical functions for fitting
 def gaussian(x,a,x0,sigma): 
@@ -380,13 +389,13 @@ def maximum_concentration(dataframe):
                 a = np.max(y)
 
                 try: #gaussian fit
-                    params,pcov = curve_fit(gaussian,x,y,p0=[a,mu,sigma],bounds=((0,0,-np.inf),(np.max(y),np.inf,np.inf)))
-                    if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
+                    popt,pcov = curve_fit(gaussian,x,y,p0=[a,mu,sigma],bounds=((0,0,-np.inf),(np.max(y),np.inf,np.inf)))
+                    if ((popt[1]>=x.max()) | (popt[1]<=x.min())): #checking that the peak is within time range
                         print("Peak outside range. Skipping.")
                     else:
-                        max_conc_time = np.append(max_conc_time,params[1]+x_min) #make a list of times with the max concentration time in each diameter
+                        max_conc_time = np.append(max_conc_time,popt[1]+x_min) #make a list of times with the max concentration time in each diameter
                         max_conc_diameter = np.append(max_conc_diameter,float(df_modes.columns[dp_index])) #make list of diameters with max concentrations
-                        max_conc = np.append(max_conc,params[0]+y_min) #maximum concentrations
+                        max_conc = np.append(max_conc,popt[0]+y_min) #maximum concentrations
                         
                         #create dfs with start and end points
                         df_mode_start = pd.DataFrame(np.nan, index=dataframe.index, columns=dataframe.columns)
@@ -407,7 +416,7 @@ def maximum_concentration(dataframe):
                         dfs_mode_end.append(df_mode_end)
                         
                         #gaussian fit parameters with start and end times and minimum concentration of horizontal mode
-                        fitting_params.append([start_time_days, end_time_days, params[0]+y_min, params[1]+x_min, params[2]])                               
+                        fitting_params.append([start_time_days, end_time_days, popt[0]+y_min, popt[1]+x_min, popt[2]])                               
                 except:
                     print("Diverges. Skipping.")
                                     
@@ -473,11 +482,11 @@ def appearance_time(dataframe):
                 a = np.max(y)
 
                 try: 
-                    params,pcov = curve_fit(gaussian,x,y,p0=[a,mu,sigma],bounds=((0,0,-np.inf),(np.max(y),np.inf,np.inf)))
-                    if ((params[1]>=x.max()) | (params[1]<=x.min())): #checking that the peak is within time range
+                    popt,pcov = curve_fit(gaussian,x,y,p0=[a,mu,sigma],bounds=((0,0,-np.inf),(np.max(y),np.inf,np.inf)))
+                    if ((popt[1]>=x.max()) | (popt[1]<=x.min())): #checking that the peak is within time range
                         print("Peak outside range. Skipping.")
                     else:
-                        max_conc_time = params[1] #from gaussian fit
+                        max_conc_time = popt[1] #from gaussian fit
 
                         #limit x and y to values between start time of mode and maximum concentration time in mode
                         max_conc_index = closest(x, max_conc_time)
@@ -487,21 +496,21 @@ def appearance_time(dataframe):
                         #logistic fit
                         if len(y_sliced) != 0:
                             #initial guess for parameters
-                            L = params[0] #maximum value of gaussian fit (concentration)
+                            L = popt[0] #maximum value of gaussian fit (concentration)
                             x0 = np.nanmean(x_sliced) #midpoint x value (appearance time)
                             k = 1.0 #growth rate
 
                             try:
-                                params,pcov = curve_fit(logistic,x_sliced,y_sliced,p0=[L,x0,k],bounds=((params[0]*0.999,0,-np.inf),(params[0],np.inf,np.inf)))
-                                if ((params[1]>=x_sliced.max()) | (params[1]<=x_sliced.min())): #checking that the peak is within time range   
+                                popt,pcov = curve_fit(logistic,x_sliced,y_sliced,p0=[L,x0,k],bounds=((popt[0]*0.999,0,-np.inf),(popt[0],np.inf,np.inf)))
+                                if ((popt[1]>=x_sliced.max()) | (popt[1]<=x_sliced.min())): #checking that the peak is within time range   
                                     print("Peak outside range. Skipping.")
                                 else:
-                                    appear_time = np.append(appear_time,params[1]+x_min) #make a list of times with the appearance time in each diameter
+                                    appear_time = np.append(appear_time,popt[1]+x_min) #make a list of times with the appearance time in each diameter
                                     appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp_index])) 
-                                    mid_conc.append((params[0]+y_min)/2) #appearance time concentration (~50% maximum concentration), L/2, y_min to preserve shape of graph
+                                    mid_conc.append((popt[0]+y_min)/2) #appearance time concentration (~50% maximum concentration), L/2, y_min to preserve shape of graph
 
                                     #logistic fit parameters with time range and minimum concentration of horizontal mode
-                                    fitting_params.append([x[0]+x_min, x[-1]+x_min, params[0]+y_min, params[1]+x_min, params[2]])                                 
+                                    fitting_params.append([x[0]+x_min, x[-1]+x_min, popt[0]+y_min, popt[1]+x_min, popt[2]])                                 
                             except:
                                 print("Logistic diverges. Skipping.")
                         else:
@@ -636,70 +645,11 @@ def filter_duplicates(list,time_days):
 
     return list, time_days
 
-xyz_maxcon, x_maxcon_days = filter_duplicates(xyz_maxcon,x_maxcon_days)
-xyz_appear, x_appear_days = filter_duplicates(xyz_appear,x_appear_days)
+#xyz_maxcon, x_maxcon_days = filter_duplicates(xyz_maxcon,x_maxcon_days)
+#xyz_appear, x_appear_days = filter_duplicates(xyz_appear,x_appear_days)
 
 
 #################### GR DATA ######################
-
-def robust_fit(time,diam,color):
-    """
-    Args:
-        time (_type_): _description_
-        diam (_type_): _description_
-        
-    Robust linear model with statsmodel package.
-    Used the HuberT weighting function in iterative 
-    robust estimation.
-    
-    
-    """
-    #do fit to linear data
-    #diam_log = np.geomspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
-    diam_linear = np.linspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
-    time = np.array(time).reshape(-1,1)
-    diam = np.array(diam).reshape(-1,1)
-    
-    #linear fit for comparison
-    #lr = linear_model.LinearRegression().fit(diam, time) #x,y
-
-    #robust fit
-    #ransac = linear_model.RANSACRegressor().fit(diam, time)
-    rlm_HuberT = sm.RLM(time, sm.add_constant(diam), M=sm.robust.norms.HuberT()) #statsmodel robust linear model
-    rlm_results = rlm_HuberT.fit()
-    
-    #predict data of estimated models
-    #t_linear = lr.predict(diam_linear)
-    #t_ransac = ransac.predict(diam_linear)
-    t_rlm = rlm_results.predict(sm.add_constant(diam_linear))
-    t_params = rlm_results.params
-
-    #change times to UTC
-    #time_fit_linear = list(t_linear.reshape(-1))
-    #time_UTC_linear = np.array(days_into_UTC(time_fit_linear)) #change days into UTC
-    #time_fit_ransac = list(t_ransac.reshape(-1))
-    #time_UTC_ransac = np.array(days_into_UTC(time_fit_ransac)) #change days into UTC
-    time_fit_rlm = list(t_rlm.reshape(-1))
-    time_UTC_rlm = np.array(days_into_UTC(time_fit_rlm)) #change days into UTC
-    
-    lw = 2
-    #plt.plot(time_UTC, diam_linear, color="navy", linewidth=lw, label="Linear regressor")
-    #plt.plot(time_UTC_ransac,diam_linear,color="cornflowerblue",linewidth=lw,label="RANSAC regressor")
-    #plt.plot(time_UTC_linear, diam_linear, color="navy", linewidth=lw)
-    #plt.plot(time_UTC_ransac, diam_linear,color="red",linewidth=lw)
-    plt.plot(time_UTC_rlm, diam_linear,color=color,linewidth=lw)
-    
-    #growth rate annotation
-    gr = 1/(t_params[1]*24) #unit to nm/h from time in days
-    
-    midpoint_idx = len(time_fit_rlm) // 2 #growth rate value
-    midpoint_time = time_UTC_rlm[midpoint_idx]
-    midpoint_value = diam[midpoint_idx]
-    plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8)
-    
-    #print("Statsmodel robus linear model results: \n",rlm_results.summary())
-    #print("\nparameters: ",rlm_results.params)
-    #print(help(sm.RLM.fit))
 
 def find_dots_old(times,diams):
     '''
@@ -765,79 +715,166 @@ def find_dots(times,diams):
     list: Combined lists of nearby datapoints.
     ''' 
     #combine to the same list and sort data by diameter
-    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1))) #[[time1,diam1],[time2,diam2]...]
-    
+    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1,0))) #[[time1,diam1],[time2,diam2]...]
+
     data_pairs = []
-    base_max_time_diff = 90/(60*24) #max time difference in days = 90mins = 1,5h
-    higher_max_time_diff = 120/(60*24) #120mins = 2h
+    base_max_time_diff = 150/(60*24) #max time difference in days = 150mins = 2,5h
+    higher_max_time_diff = 180/(60*24) #180mins = 3h
     
     #iterate through each datapoint to find suitable pairs of mode fitting datapoints
     for i, datapoint in enumerate(data_sorted):
         for ii in range(1,len(data_sorted)-i):
-            try: #in case we reach the end with no "next datapoint"
-                next_datapoint = data_sorted[i+ii] #always after current datapoint
-                time0, diam0 = datapoint
-                time1, diam1 = next_datapoint
-                time_diff = abs(time1-time0)
-                diam_diff = abs(diam1-diam0)
-                
-                #diam difference in channels changes in a logarithmic scale, allow one empty channel in between
-                nextnext_diam = df.columns.values[df.columns.values > diam0][1] #diameter in the channel one after
-                next_diam = df.columns.values[df.columns.values > diam0][0]
-                max_diam_diff = abs(next_diam-nextnext_diam) #max one diameter channel empty in between
-                
-                #at higher diameters allow longer time difference between starts
-                max_time_diff = higher_max_time_diff if diam0 >= 22 else base_max_time_diff
+            next_datapoint = data_sorted[i+ii] #always after current datapoint
+            time0, diam0 = datapoint
+            time1, diam1 = next_datapoint
+            time_diff = abs(time1-time0)
+            diam_diff = abs(diam1-diam0)
 
-                if diam_diff > max_diam_diff: #if diam difference is already too big break loop
-                    break
-                elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
-                    data_pairs.append([datapoint,next_datapoint]) #add nearby datapoint pairs to list
-                    combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+            #diam difference in channels changes in a logarithmic scale
+            nextnext_diam = df.columns.values[df.columns.values > diam0][1] #diameter in the channel one after
+            max_diam_diff = abs(diam0-nextnext_diam) #max one diameter channel empty in between
+            
+            #at higher diameters allow longer time difference between stars
+            max_time_diff = higher_max_time_diff
+
+            """
+            if i >= 60:
+                print("current datapoint",datapoint,"next_datapoint",next_datapoint)
+                print("nextnext_diam",nextnext_diam)
+                print("max_diam_diff",max_diam_diff)
+            """
+            if diam_diff > max_diam_diff: #if diam difference is already too, big break loop
+                print("diam difference is too big")
+                break
+            elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
+                data_pairs.append([datapoint,next_datapoint]) #add nearby datapoint pairs to list
+                combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+                combined_list = combined #now when we modify combined it wont affect the for loop
+                
+                if i >= 30 and i <=45:
+                    print(i,ii)
+                    print([datapoint,next_datapoint])
+                    print(combined)
+                
+                #make a linear fit to check mape in each line of datapoints
+                for iii, line in enumerate(combined_list):
+                    if len(line) <= 2: #pointless to analyze mape with less than 3 datapoints
+                        continue #proceed to next line
                     
-                    #make a linear fit to check mape in each line of datapoints
-                    for iii, line in enumerate(combined):
-                        x = np.arange(len(line)) #diams
-                        y = [datapoint[0] for datapoint in line] #times
+                    x = [datapoint[1] for datapoint in line] #diams
+                    y = [datapoint[0] for datapoint in line] #times                 
+                    popt, mape = cal_mape(x,y)
+                    GR2 = 1/(popt[0]*24) #growth rate
+                    
+                    #lets calculate the previous growth rate as well to compare them
+                    x = [datapoint[1] for datapoint in line[:-1]] #diams
+                    y = [datapoint[0] for datapoint in line[:-1]] #times                 
+                    popt, mape = cal_mape(x,y)
+                    GR1 = 1/(popt[0]*24) #growth rate
+                    
+                    #precentual change
+                    GR_change = abs((GR1-GR2)/GR2) * 100
+                    print("GR_change",GR_change)
+                    #if growth rate changes more than 85%
+                    if GR_change >= 85:
+                        #delete recently added datapoint from both lists
+                        combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
+                        data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
+                    
+                    '''
+                    relation = abs(GR / line[-1][1])
+                    
+                    if relation > 0.10 and relation < 0.20:
+                        max_time_diff = 150/(60*24)
+                    else:
+                        max_time_diff = 120/(60*24)
+                    '''    
+                    
+                    
+                    '''
+                    Mape is not the same in different scales so here the threshold must be stricter
+                    Mape threshold linearly gets stricter until 5 datapoints
+                    With 5 or more points threshold is 0.02% and with 3 points 0.03%'''
+                    mape_threshold = -0.0025*len(line)+0.04 if len(line) < 5 else 0.025
+                    '''
+                    if i >= 20 and i <= 45:
+                        print("mape_threshold",mape_threshold)
+                        print("first mape",mape)
+                    '''
+                    if mape > mape_threshold:
+                        #calculate mape without first datapoint of line to see if mape is smaller
+                        x = [datapoint[1] for datapoint in line[1:]]
+                        y = [datapoint[0] for datapoint in line[1:]] #times
+                        popt, mape = cal_mape(x,y)
                         
-                        if len(x) == 1: #fitting curve wont work with only 1 datapoint
-                            continue
+                        if mape > mape_threshold: #if mape is still too big
+                            #delete recently added datapoint from both lists
+                            combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
+                            data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
                         
-                        popt, pcov = curve_fit(linear, x, y)
-                        absolute_error = np.abs(linear(x, *popt) - y)
-                        mape = np.mean(absolute_error / y) * 100
+                            x = [datapoint[1] for datapoint in line[1:]]
+                            y = [datapoint[0] for datapoint in line[1:]] #times
+                            popt, mape = cal_mape(x,y) #update mape value
+                        else:
+                            pass
+                            #remove the first datapoint of the line
+                            #first_datapoint = line[0]
+                            #combined[iii] = line[1:]
+                            #remove also data pair with this datapoint
+                            #data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
+                    
+                    """
+                    #try splitting line into two parts from the middle to lower mape
+                    if len(combined[iii]) >= 8: #at least 8 datapoints needed
+                        middle_index = int(len(combined[iii])/2) #rounding down with int()
+                        line_1st_half = combined[iii][:middle_index]
+                        #uneven numbers include one more element in the 2nd half
+                        line_2nd_half = combined[iii][-middle_index:] if len(combined[iii])%2 == 0 else combined[iii][-(middle_index+1):]
 
-                        #mape is not the same in different scales so here the threshold must be stricter
-                        #allow mape of 5% when there are only 3 datapoints, otherwise 4%
-                        mape_threshold = 0.025 if len(line) <= 3 else 0.02
+                        #calculate if mape lowered significantly
+                        x = [datapoint[1] for datapoint in line_1st_half]
+                        y = [datapoint[0] for datapoint in line_1st_half] #times
+                        popt, mape1 = cal_mape(x,y)
                         
-                        if mape > mape_threshold:
-                            #calculate mape without first datapoint of line to see if mape is smaller
-                            x = np.arange(len(line[1:]))
-                            y = [datapoint[0] for datapoint in line[1:]] #diams of line
-                            popt, pcov = curve_fit(linear, x, y)
-                            absolute_error = np.abs(linear(x, *popt) - y)
-                            mape = np.mean(absolute_error / y) * 100
-                            
-                            if mape > mape_threshold: #if mape is still too big
-                                #delete recently added datapoint from both lists
-                                combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
-                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
-                            else:
-                                #remove the first datapoint of the line
-                                first_datapoint = line[0]
-                                combined[iii] = line[1:]
-                                #remove also data pair with this datapoint
-                                data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
-                            
-                    break
-                else: #keep looking for next datapoint until end of points if the next one isnt suitable
-                    continue
-            except IndexError:
-                print("INDEX ERROR")
+                        x = [datapoint[1] for datapoint in line_2nd_half]
+                        y = [datapoint[0] for datapoint in line_2nd_half] #times
+                        popt, mape2 = cal_mape(x,y)
+                        
+                        #relative change in mape
+                        rel_diff1 = ((mape1-mape)/mape) * 100
+                        rel_diff2 = ((mape2-mape)/mape) * 100
+                        
+                        #if mape improves (decreases) by 30% split line in two
+                        if rel_diff1 <= 60 and rel_diff2 <= 60:
+                            #remove the first half of current line and add it as its own line
+                            combined[iii] = line_1st_half
+                            combined.append(line_2nd_half)    
+                        """
+                        
+                break
+            else: #keep looking for next datapoint until end of points if the next one isnt suitable
                 continue
     
-    combined = [sorted(component, key=lambda x: x[0]) for component in combined] # Sort each individual component by timestamp
+    
+    for line in combined:
+        #diam_diff = abs(line[0][1]-line[-1][1])
+        #relation = diam_diff / line[-1][1]
+        
+        if len(line) > 3:
+            x = [datapoint[1] for datapoint in line] #diams
+            y = [datapoint[0] for datapoint in line] #times                 
+            popt, mape = cal_mape(x,y)
+            GR = 1/(popt[0]*24) #growth rate
+            relation = abs(GR / line[-1][1])
+            
+            #print("\nlast time",line[-1][0])
+            #print("growth rate",GR)
+            #print("diam diff",diam_diff,"relation",relation)
+          
+        
+    
+    
+    combined = [sorted(component, key=lambda x: x[1]) for component in combined] # Sort each individual component by diameter
     
     return combined
 
@@ -854,19 +891,14 @@ def filter_dots(datapoints):
     for line in datapoints:
         i = 1
         while True:
-            try:
-                x = np.arange(len(line)) #diams
-                y = [time[0] for time in line] #time as y
-                
-                popt, pcov = curve_fit(linear, x, y)
-                absolute_error = np.abs(linear(x, *popt) - y)
-                #print("linear(x, *popt) - y",linear(x, *popt),"-",y)
-                mape = np.mean(absolute_error / y) * 100
+                x = [datapoint[1] for datapoint in line] #diams
+                y = [datapoint[0] for datapoint in line] #time
+                popt, mape = cal_mape(x,y)
                 GR = 1/(popt[0]*24) #growth rate
 
                 #mape is not the same in different scales so here the threshold must be stricter
-                #maximum mape 1% and GR is not bigger than +-10nm/h
-                if mape <= 1 and abs(GR) <= 10:
+                #maximum mape 1% and GR is not bigger than +-15nm/h
+                if mape <= 100 and abs(GR) <= 400:
                     filtered_datapoints.append(line)
                     break
                 else:
@@ -876,9 +908,6 @@ def filter_dots(datapoints):
                 #    i += 1
                     #print("deleted",line[-1])
                     #removed_points.append(line[-1])    #add removed datapoint to another list
- 
-            except:
-                print("Linear fit diverges.")
 
     return filtered_datapoints  
 def init_find():
@@ -901,6 +930,51 @@ def init_find():
     
 #################### PLOTTING ######################
 
+def robust_fit(time,diam,color):
+    """
+    Args:
+        time (_type_): _description_
+        diam (_type_): _description_
+        
+    Robust linear model with statsmodel package.
+    Used the HuberT weighting function in iterative 
+    robust estimation.
+    
+    
+    """
+    #do fit to linear data
+    #diam_log = np.geomspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
+    diam_linear = np.linspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
+
+    #linear fit for comparison
+    #lr = linear_model.LinearRegression().fit(diam, time) #x,y
+
+    #robust fit
+    rlm_HuberT = sm.RLM(time, sm.add_constant(diam), M=sm.robust.norms.HuberT()) #statsmodel robust linear model
+    rlm_results = rlm_HuberT.fit()
+    
+    #predict data of estimated models
+    t_rlm = rlm_results.predict(sm.add_constant(diam_linear))
+    t_params = rlm_results.params
+
+    if len(t_params) > 1: #sometimes lines with datapoints that all have the same diameter, REMOVE WHEN FILTERING IS FIXED
+        #change times to UTC
+        time_UTC_rlm = np.array(days_into_UTC(t_rlm)) #change days into UTC
+
+        #growth rate annotation
+        gr = 1/(t_params[1]*24) #unit to nm/h from time in days
+        
+        plt.plot(time_UTC_rlm, diam_linear,color=color,linewidth=2)
+            
+        midpoint_idx = len(diam_linear) // 2 #growth rate value
+        midpoint_time = time_UTC_rlm[midpoint_idx]
+        midpoint_value = diam[midpoint_idx]
+        plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7, fontweight='bold')
+        
+        #print("Statsmodel robus linear model results: \n",rlm_results.summary())
+        #print("\nparameters: ",rlm_results.params)
+        #print(help(sm.RLM.fit))
+
 def linear_fit(time,diam):
     '''
     y = time in days
@@ -908,10 +982,10 @@ def linear_fit(time,diam):
     Flipped as the error is in time.
     '''
     #linear least square fits
-    #params, pcov = curve_fit(linear, np.log(diam), time) #logarthmic diam
-    params, pcov = curve_fit(linear, diam, time) #linear diam
-    gr = 1/(params[0]*24) #unit to nm/h from time in days
-    time_fit = params[0]*np.array(diam) + params[1]
+    #popt, pcov = curve_fit(linear, np.log(diam), time) #logarthmic diam
+    popt, pcov = curve_fit(linear, diam, time) #linear diam
+    gr = 1/(popt[0]*24) #unit to nm/h from time in days
+    time_fit = popt[0]*np.array(diam) + popt[1]
     time_UTC = np.array(days_into_UTC(time_fit)) #change days into UTC
 
     #plotting
@@ -950,10 +1024,10 @@ def plot_manual_GR(times,diams,time_range,diam_range):
     y = np.sort(sub_times)
 
     #linear least square fits
-    #params, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
-    params, pcov = curve_fit(linear, x, y) #linear x
-    gr = 1/(params[0]*24) #unit to nm/h from time in days
-    y_fit = params[0]*x + params[1] #TOOK LOG(x) AWAY
+    #popt, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
+    popt, pcov = curve_fit(linear, x, y) #linear x
+    gr = 1/(popt[0]*24) #unit to nm/h from time in days
+    y_fit = popt[0]*x + popt[1] #TOOK LOG(x) AWAY
     x_UTC = np.array(days_into_UTC(y_fit)) #change days into UTC
 
     #plotting
@@ -985,13 +1059,12 @@ def plot_PSD(dataframe):
     plt.plot(xyz_appear[0], xyz_appear[1], '*', alpha=0.5, color='green', ms=5,label='appearance time')
     
     #growth rates
-    
     time_mc, diam_mc, time_at, diam_at = init_find()
     for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
         #linear_fit(time_seg_mc, diam_seg_mc) #maximum concentration
         #linear_fit(time_seg_at, diam_seg_at) #appearance time
-        robust_fit(time_seg_at, diam_seg_at,"green")
         robust_fit(time_seg_mc, diam_seg_mc,"white")
+        robust_fit(time_seg_at, diam_seg_at,"green")
     
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
@@ -1003,6 +1076,7 @@ def plot_PSD(dataframe):
     plt.ylim(dataframe.columns[0],dataframe.columns[-1])
     plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
     plt.xlabel("time",fontsize=14) #add y-axis label
+    ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
 plot_PSD(df)
 
 def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
@@ -1306,7 +1380,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     green_star2.set_markeredgecolor("black")
     
     fig.tight_layout()
-#plot_channel(df,[df.columns[7],df.columns[8]],choose_GR=None,draw_range_edges=True)
+#plot_channel(df,[df.columns[13],df.columns[14]],choose_GR=None,draw_range_edges=True)
 
 plt.show()
 
