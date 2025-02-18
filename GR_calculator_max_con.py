@@ -5,7 +5,6 @@ import datetime
 from datetime import timedelta
 from datetime import datetime
 from scipy.optimize import curve_fit
-from scipy import interpolate
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.use("Qt5Agg") #backend changes the plotting style
@@ -15,7 +14,6 @@ from collections import defaultdict
 import statsmodels.api as sm
 from sklearn import linear_model
 from itertools import cycle
-from adjustText import adjust_text
 
 '''
 This code assumes dmps data.
@@ -194,13 +192,12 @@ def combine_connected_pairs(list):
     
     # Convert back to numpy arrays if needed
     return [[point for point in component] for component in combined_lists]
-def cal_mape(x,y):
+def cal_mape(x,y,popt):
     x = np.array(x)
     y = np.array(y)
-    popt, pcov = curve_fit(linear, x, y)
     absolute_error = np.abs(linear(x, *popt) - y)
     mape = np.mean(absolute_error / y) * 100
-    return popt,mape
+    return mape
 
 #define mathematical functions for fitting
 def gaussian(x,a,x0,sigma): 
@@ -297,7 +294,7 @@ def find_ranges():
     
     #pidennä ikkunaa kun loivempi??
     df_GR_values = df_GR_final #open calculated values in Gabi's code
-    threshold = 0 #GR [nm/h], all growth rates
+    threshold = 0 #GR [nm/h], 0 = all growth rates
 
     df_ranges = []
     growth_rates =[]
@@ -319,8 +316,8 @@ def find_ranges():
                 end_diam = row["d_final"]
             
             #make the ranges bigger with given parameters
-            start_time = start_time - timedelta(hours=5) #5 hours
-            end_time = end_time + timedelta(hours=5)
+            start_time = start_time - timedelta(hours=4) #5 hours
+            end_time = end_time + timedelta(hours=4)
             
             start_diam = start_diam / 1.5 #factor of 1.5
             end_diam = end_diam * 1.5
@@ -651,57 +648,155 @@ def filter_duplicates(list,time_days):
 
 #################### GR DATA ######################
 
-def find_dots_old(times,diams):
+def find_dots(times,diams):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
     Returns lists with wanted times and diameters for plotting growth rates.
     
     Parameters:
-    times (list): List of time values.
+    times (list): List of time values in days.
     diams (list): List of corresponding diameter values.
     
     Returns:
     list: Combined lists of nearby datapoints.
     ''' 
     #combine to the same list and sort data by diameter
-    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1))) #[[time1,diam1],[time2,diam2]...]
+    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1,0))) #[[time1,diam1],[time2,diam2]...]
 
     data_pairs = []
-    base_max_time_diff = 90/(60*24) #max time difference in days = 90mins = 1,5h
-    higher_max_time_diff = 120/(60*24) #120mins = 2h
-
-    #iterate through each datapoint to find suitable pairs
+    base_max_time_diff = 150/(60*24) #max time difference in days = 150mins = 2,5h
+    higher_max_time_diff = 180/(60*24) #180mins = 3h
+    
+    #iterate through each datapoint to find suitable pairs of mode fitting datapoints
     for i, datapoint in enumerate(data_sorted):
-        for ii in range(1,len(data_sorted)-i):
-            try: #in case we reach the end with no "next datapoint"
-                next_datapoint = data_sorted[i+ii]
-                time0, diam0 = datapoint
-                time1, diam1 = next_datapoint
-                time_diff = abs(time1-time0)
-                diam_diff = abs(diam1-diam0)
+        time0, diam0 = datapoint #current datapoint
+        
+        #iterate through diameter channels after current datapoint and look for the nearest datapoint in that channel
+        for ii in range(1,3): #one step represents one diam channel, allows one channel in between
+            #print(i,ii)
+            #diameter for current iteration
+            diam_channel = df.columns.values[df.columns.values >= diam0][ii]
+            
+            #search for datapoints in this diameter channel
+            channel_points = [point for point in data_sorted if point[1] == diam_channel]
+            if not channel_points: #skip if no datapoints in current channel
+                continue
+            
+            #closest datapoint
+            nearby_datapoint = tuple(min(channel_points, key=lambda point: abs(point[0] - time0))) #!!!
+            time_diff = abs(nearby_datapoint[0] - time0)
+            
+            max_time_diff = base_max_time_diff #MAKE THIS BETTER LATER
+    
+            #check diameter difference
+            if time_diff <= max_time_diff: 
+                data_pairs.append([(datapoint[0],datapoint[1]),nearby_datapoint]) #add nearby datapoint pairs to list
+                combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+                combined = [sorted(sublist, key=lambda x: x[1]) for sublist in combined] #make sure datapoints in every line are sorted by diameter
                 
-                nextnext_diam = df.columns.values[df.columns.values > diam0][1] # 2 diameter points forward after current diameter
-                max_diam_diff = abs(diam0-nextnext_diam) #max one diameter channel empty in between
+                #make a linear fit to check mape for line with new datapoint
+                iii, current_line = [(i,line) for i,line in enumerate(combined) if nearby_datapoint in line][0]
                 
-                #at higher diameters allow longer time difference between starts
-                max_time_diff = higher_max_time_diff if diam0 >= 22 else base_max_time_diff
+                if len(current_line) <= 2: #pointless to analyze mape with less than 3 datapoints
+                    continue #proceed to next line
+                elif len(current_line) >= 3:
+                    x = [datapoint[1] for datapoint in current_line] #diams
+                    y = [datapoint[0] for datapoint in current_line] #times
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape = cal_mape(x,y,popt)
+                else:#THIS ISNT BEING USED CURRENTLY
+                    #do fit to previous datapoints and calculate mape with the new datapoint included
+                    x = [datapoint[1] for datapoint in current_line[:-1]] #diams (last datapoint excluded)
+                    y = [datapoint[0] for datapoint in current_line[:-1]] #times (last datapoint excluded)
+                    popt, pcov = curve_fit(linear, x, y)
+
+                    #add newest datapoint back to x and y
+                    x = [datapoint[1] for datapoint in current_line] #diams
+                    y = [datapoint[0] for datapoint in current_line] #times
+                    mape = cal_mape(x,y,popt) #!!!
+                    
+                    #check mape of the whole line also
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape = cal_mape(x,y,popt)
+
+
                 
-                if time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
-                    #sub_data.append(next_datapoint) #add next valid datapoint to the sublist
-                    data_pairs.append([datapoint,next_datapoint])
-                    break #next point found 
-                elif diam_diff > max_diam_diff: #if diam difference is already too big break loop
-                    break
-                else: #keep looking for next datapoint until end of points if the next one isnt suitable
-                    continue
-            except IndexError:
+                mape_threshold = 0.1*len(current_line)**(-1) #0.01*x^(-1)
+                #if mape_threshold > 0.025:
+                #    mape_threshold = 0.025
+            
+                if len(current_line) == 11:
+                    print(mape)
+                #print("threshold:",mape_threshold)    
+                
+                
+                if mape > mape_threshold:
+                    #calculate mape without first datapoint of line to see if mape is smaller
+                    x = [datapoint[1] for datapoint in current_line[1:]]
+                    y = [datapoint[0] for datapoint in current_line[1:]] #times
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape = cal_mape(x,y,popt)
+                    
+                    if mape > mape_threshold: #if mape is still too big
+                        #delete recently added datapoint from both lists
+                        combined = [[point for point in component if point != nearby_datapoint] for component in combined] 
+                        data_pairs = [pair for pair in data_pairs if not any(np.array_equal(nearby_datapoint, point) for point in pair)]
+
+                        x = [datapoint[1] for datapoint in current_line[:-1]]
+                        y = [datapoint[0] for datapoint in current_line[:-1]] #times
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape = cal_mape(x,y,popt) #update mape value 
+                    else:
+                        #remove the first datapoint of the line
+                        first_datapoint = current_line[0]
+                        combined[iii] = current_line[1:]
+                        #remove also data pair with this datapoint
+                        data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
+                
+                '''
+                #try splitting line into two parts from the middle to lower mape
+                #does it when all lines haven't been found yet
+                if len(combined[iii]) >= 8: #at least 8 datapoints needed
+                    middle_index = int(len(combined[iii])/2) #rounding down with int()
+                    line_1st_half = combined[iii][:middle_index]
+                    #uneven numbers include one more element in the 2nd half
+                    line_2nd_half = combined[iii][-middle_index:] if len(combined[iii])%2 == 0 else combined[iii][-(middle_index+1):]
+                    
+                    #calculate if mape lowered significantly
+                    x = [datapoint[1] for datapoint in line_1st_half]
+                    y = [datapoint[0] for datapoint in line_1st_half] #times
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape1 = cal_mape(x,y,popt)
+                    
+                    x = [datapoint[1] for datapoint in line_2nd_half]
+                    y = [datapoint[0] for datapoint in line_2nd_half] #times
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape2 = cal_mape(x,y,popt)
+                    
+                    #relative change in mape
+                    rel_diff1 = ((mape1-mape)/mape) * 100
+                    rel_diff2 = ((mape2-mape)/mape) * 100
+                    
+                    #if mape improves (decreases) by 40% split line in two
+                    if rel_diff1 <= -40 or rel_diff2 <= -40:
+                        #remove the second half of current line and add it as its own line
+                        combined[iii] = line_1st_half
+                        combined.append(line_2nd_half)
+                        
+                        #remove from data_pairs also
+                        connecting_pair = [line_1st_half[-1],line_2nd_half[0]]
+                        data_pairs = [pair for pair in data_pairs if not np.array_equal(connecting_pair, pair)]
+                    '''
+                break
+            else: #keep looking for next datapoint until end of points if the next one isnt suitable
                 continue
     
-    #combine overlapping lists to create lists with nearby datapoints
-    combined = combine_connected_pairs(data_pairs)          
+    combined = [sorted(component, key=lambda x: x[1]) for component in combined] # Sort each individual component by diameter
+    
     return combined
-def find_dots(times,diams):
+
+def find_dotsOLD(times,diams):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
@@ -751,11 +846,12 @@ def find_dots(times,diams):
                 combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
                 combined_list = combined #now when we modify combined it wont affect the for loop
                 
+                '''
                 if i >= 30 and i <=45:
                     print(i,ii)
                     print([datapoint,next_datapoint])
                     print(combined)
-                
+                '''
                 #make a linear fit to check mape in each line of datapoints
                 for iii, line in enumerate(combined_list):
                     if len(line) <= 2: #pointless to analyze mape with less than 3 datapoints
@@ -763,18 +859,20 @@ def find_dots(times,diams):
                     
                     x = [datapoint[1] for datapoint in line] #diams
                     y = [datapoint[0] for datapoint in line] #times                 
-                    popt, mape = cal_mape(x,y)
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape = cal_mape(x,y,popt)
                     GR2 = 1/(popt[0]*24) #growth rate
                     
                     #lets calculate the previous growth rate as well to compare them
                     x = [datapoint[1] for datapoint in line[:-1]] #diams
                     y = [datapoint[0] for datapoint in line[:-1]] #times                 
-                    popt, mape = cal_mape(x,y)
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape = cal_mape(x,y,popt)
                     GR1 = 1/(popt[0]*24) #growth rate
                     
                     #precentual change
                     GR_change = abs((GR1-GR2)/GR2) * 100
-                    print("GR_change",GR_change)
+                    #print("GR_change",GR_change)
                     #if growth rate changes more than 85%
                     if GR_change >= 85:
                         #delete recently added datapoint from both lists
@@ -796,25 +894,27 @@ def find_dots(times,diams):
                     Mape threshold linearly gets stricter until 5 datapoints
                     With 5 or more points threshold is 0.02% and with 3 points 0.03%'''
                     mape_threshold = -0.0025*len(line)+0.04 if len(line) < 5 else 0.025
-                    '''
+                    
                     if i >= 20 and i <= 45:
                         print("mape_threshold",mape_threshold)
                         print("first mape",mape)
-                    '''
+                    
                     if mape > mape_threshold:
                         #calculate mape without first datapoint of line to see if mape is smaller
                         x = [datapoint[1] for datapoint in line[1:]]
                         y = [datapoint[0] for datapoint in line[1:]] #times
-                        popt, mape = cal_mape(x,y)
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape = cal_mape(x,y,popt)
                         
                         if mape > mape_threshold: #if mape is still too big
                             #delete recently added datapoint from both lists
                             combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
                             data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
                         
-                            x = [datapoint[1] for datapoint in line[1:]]
-                            y = [datapoint[0] for datapoint in line[1:]] #times
-                            popt, mape = cal_mape(x,y) #update mape value
+                            x = [datapoint[1] for datapoint in line[:-1]]
+                            y = [datapoint[0] for datapoint in line[:-1]] #times
+                            popt, pcov = curve_fit(linear, x, y)
+                            mape = cal_mape(x,y,popt) #update mape value
                         else:
                             pass
                             #remove the first datapoint of the line
@@ -855,7 +955,7 @@ def find_dots(times,diams):
             else: #keep looking for next datapoint until end of points if the next one isnt suitable
                 continue
     
-    
+    '''
     for line in combined:
         #diam_diff = abs(line[0][1]-line[-1][1])
         #relation = diam_diff / line[-1][1]
@@ -870,7 +970,7 @@ def find_dots(times,diams):
             #print("\nlast time",line[-1][0])
             #print("growth rate",GR)
             #print("diam diff",diam_diff,"relation",relation)
-          
+        '''
         
     
     
@@ -893,7 +993,8 @@ def filter_dots(datapoints):
         while True:
                 x = [datapoint[1] for datapoint in line] #diams
                 y = [datapoint[0] for datapoint in line] #time
-                popt, mape = cal_mape(x,y)
+                popt, pcov = curve_fit(linear, x, y)
+                mape = cal_mape(x,y,popt)
                 GR = 1/(popt[0]*24) #growth rate
 
                 #mape is not the same in different scales so here the threshold must be stricter
@@ -969,7 +1070,7 @@ def robust_fit(time,diam,color):
         midpoint_idx = len(diam_linear) // 2 #growth rate value
         midpoint_time = time_UTC_rlm[midpoint_idx]
         midpoint_value = diam[midpoint_idx]
-        plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7, fontweight='bold')
+        plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
         
         #print("Statsmodel robus linear model results: \n",rlm_results.summary())
         #print("\nparameters: ",rlm_results.params)
@@ -1380,7 +1481,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     green_star2.set_markeredgecolor("black")
     
     fig.tight_layout()
-#plot_channel(df,[df.columns[13],df.columns[14]],choose_GR=None,draw_range_edges=True)
+#plot_channel(df,[df.columns[10],df.columns[11],df.columns[12]],choose_GR=None,draw_range_edges=False) #DOESNT WORK WITH ONLY ONE GRAPH!!
 
 plt.show()
 
