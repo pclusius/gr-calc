@@ -20,6 +20,7 @@ from os import listdir ###
 import json ###
 from operator import itemgetter ###
 from collections import defaultdict ###
+import time ###
 
 ###################################################################
 #paths = "./dmps Nesrine/dm160401.sum" ###path to data file
@@ -225,7 +226,7 @@ df_modefits['timestamp']=pd.to_datetime(df_modefits['timestamp'], format="%Y-%m-
 df_modefits.index=df_modefits['timestamp']
 df_modefits = df_modefits.drop(['timestamp'], axis=1)
 
-print('df_modefits',df_modefits)
+#print('df_modefits',df_modefits) ###
    
 ###
 ##############################################################
@@ -400,19 +401,34 @@ def combine_segments(df, abr, segments, mape_threshold=5): ### mape_threshold=2 
 #riippuen datapisteiden määrästä mape muuttuu, mape N:n funktiona, alussa mape isompi, myöhemmin pienempi
 #YHDISTÄ KAIKKI MOODIT ENSIN YHTEEN
 #ETSI AINA AIKASTEPPI KERRALLAAN +-10nm VÄLILLÄ SEURAAVA PISTE, MOODIEN VÄLISSÄ +- VOI OLLA LAAJEMPI (15nm?)
+def timestamp_indexing(timestamps):
+    '''
+    Creates list of indices corresponding to given timestamp list.
+    Needed when there are gaps in time lists.
+    '''
+    start_time = timestamps[0]
+    time_interval = 30 #minutes
+    indices = []
+
+    for time in timestamps:
+        mins_since_start = abs((time - start_time).total_seconds() / 60) #for each timestamp
+        index = int(mins_since_start / time_interval) #divide by interval
+        indices.append(index)
+    
+    return np.array(indices)
 def combine_connected_pairs(list):
     ''' From AI
     Takes in a list of lists with pairs of datapoints and
     returns a list with lists pooled together containing
     overlapping elements. 
     '''
-    # Convert arrays to tuples for hashing and build adjacency list
+    #convert arrays to tuples for hashing and build adjacency list
     graph = defaultdict(set)
     for p1, p2 in list:
         graph[tuple(p1)].add(tuple(p2))
         graph[tuple(p2)].add(tuple(p1))
     
-    # Find connected components using DFS
+    #find connected components using DFS
     visited = set()
     combined_lists = []
     
@@ -428,7 +444,7 @@ def combine_connected_pairs(list):
                     stack.extend(graph[current] - visited)
             combined_lists.append(component)
     
-    # Convert back to numpy arrays if needed
+    #new points will be added in random position of list!!
     return [[point for point in component] for component in combined_lists]
 def closest(list, number):
     '''
@@ -439,13 +455,193 @@ def closest(list, number):
     for i in list:
         value.append(abs(number-i))
     return value.index(min(value))
-def cal_mape(x,y):
-    popt, pcov = curve_fit(linear, x, y)
+def cal_mape(x,y,popt):
     absolute_error = np.abs(linear(x, *popt) - y)
     mape = np.mean(absolute_error / y) * 100
-    return popt,mape
+    return mape
 
 def combine_segments_ver2(df):
+    '''
+    Finds nearby datapoints based on time and diameter constraints.
+    Fits linear curve to test if datapoints are close enough.
+    Returns lists with wanted times and diameters for plotting growth rates.
+    
+    Parameters:
+    times (list): List of time values in datetime.
+    diams (list): List of corresponding diameter values.
+    
+    Returns:
+    list: Combined lists of nearby datapoints.
+    ''' 
+    #extract times and diameters from df
+    times = df.index
+    diams = df['peak_diameter']
+    
+    #combine to the same list and sort data by diameter
+    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(0,1))) #[[time1,diam1],[time2,diam2]...]
+    
+    data_pairs = []
+    max_time_diff = 90 #90mins = 1,5h
+    
+    #iterate through each datapoint to find suitable pairs of mode fitting datapoints
+    for i, datapoint in enumerate(data_sorted):
+        time0, diam0 = datapoint #current datapoint
+        
+        #diam difference in channels changes in a logarithmic scale
+        nextnext_diam = df1.columns[closest(df1.columns,diam0)+2] #diameter in the channel one after
+        max_diam_diff = abs(df1.columns[closest(df1.columns,diam0)]-nextnext_diam) #max one diameter channel empty in between
+
+        #iterate through timestamps after current datapoint and look for the nearest datapoint in timestamp
+        timesteps = int(max_time_diff / 30)
+        
+        for ii in range(1,timesteps+1): #one step represents 30mins: [30mins, 90mins]
+            #timestamp for current iteration
+            timestamp = time0 + timedelta(minutes=30)*ii
+            #print(i,ii,"time",time0)
+            #search for datapoints in this timestamp (segment)
+            ts_points = [point for point in data_sorted if point[0] == timestamp]  
+            if not ts_points: #skip if no datapoints in current timestamp
+                continue
+            
+            #closest datapoint
+            nearby_datapoint = tuple(min(ts_points, key=lambda point: abs(point[1] - diam0)))
+            diam_diff = abs(nearby_datapoint[1] - diam0)
+            
+            #check diameter difference
+            if diam_diff <= max_diam_diff: 
+                data_pairs.append([(datapoint[0],datapoint[1]),nearby_datapoint]) #add nearby datapoint pairs to list
+                combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
+                if i < 105 and i > 90:
+                    print("nearby datapoint",nearby_datapoint)
+                    print("before",combined)
+                combined = [sorted(sublist, key=lambda x: x[0]) for sublist in combined] #make sure datapoints in every line are sorted by time
+                if i < 105 and i > 90:
+                    print("after sorting",combined)
+                
+                #make a linear fit to check mape for line with new datapoint
+                iii, current_line = [(i,line) for i,line in enumerate(combined) if nearby_datapoint in line][0]
+                if i < 105 and i > 90:
+                    print("current line",current_line,"\n")
+                
+                if len(current_line) <= 2: #pointless to analyze mape with less than 3 datapoints
+                    continue #proceed to next line
+                elif len(current_line) >= 3:
+                    x = timestamp_indexing([datapoint[0] for datapoint in current_line]) #times
+                    y = [datapoint[1] for datapoint in current_line] #diams
+                    popt, pcov = curve_fit(linear, x, y)
+                    #print("first time",current_line[0][0])
+
+                    #print(popt)
+                    mape = cal_mape(x,y,popt)
+                else:#THIS ISNT BEING USED CURRENTLY
+                    #do fit to previous datapoints and calculate mape with the new datapoint included
+                    x = timestamp_indexing([datapoint[0] for datapoint in current_line[:-1]]) #times (last datapoint excluded)
+                    y = [datapoint[1] for datapoint in current_line[:-1]] #diams (last datapoint excluded)
+                    popt, pcov = curve_fit(linear, x, y)
+
+                    #print("timestamps:",[datapoint[0] for datapoint in current_line[:-1]],"x:",x,"y:",y)
+                    #add newest datapoint back to x and y
+                    x = timestamp_indexing([datapoint[0] for datapoint in current_line])
+                    y = [datapoint[1] for datapoint in current_line]
+                    mape = cal_mape(x,y,popt) #!!!
+                    
+                    #check mape of the whole line also
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape = cal_mape(x,y,popt)
+                    
+                    #print("time0_index:",time0_index,"y_fit:","new x:",x,"new y:",y,"mape:",mape)
+                
+                #mape threshold linearly gets stricter until 5 datapoints
+                #with 5 or more points threshold is 3% and with 3 points 5%
+                #mape_threshold = -1*len(line)+8 if len(line) < 5 else 3.2
+                mape_threshold = 15*len(current_line)**(-1) #15*x^(-1)
+                if mape_threshold > 3:
+                    mape_threshold = 3
+                
+                if mape > mape_threshold:
+                    #calculate mape without first datapoint of line to see if mape is smaller
+                    x = timestamp_indexing([datapoint[0] for datapoint in current_line[1:]])
+                    y = [datapoint[1] for datapoint in current_line[1:]] #diams
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape = cal_mape(x,y,popt)
+                    
+                    if mape > mape_threshold: #if mape is still too big
+                        #if i < 105 and i > 90:
+                        #    print("nearby datapoint",nearby_datapoint)
+                        #    print("before",combined[-1])
+                            #print(data_pairs,"\n")
+                        #delete recently added datapoint from both lists
+                        combined = [[point for point in component if point != nearby_datapoint] for component in combined] 
+                        data_pairs = [pair for pair in data_pairs if not any(np.array_equal(nearby_datapoint, point) for point in pair)]
+                        #if i < 105 and i > 90:
+                        #    print("after",combined[-1],"\n")
+                            #print(data_pairs,"\n")
+                        
+                        x = timestamp_indexing([datapoint[0] for datapoint in current_line[:-1]])
+                        y = [datapoint[1] for datapoint in current_line[:-1]] #diams
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape = cal_mape(x,y,popt) #update mape value 
+                        
+                    else:
+                        #remove the first datapoint of the line
+                        first_datapoint = current_line[0]
+                        combined[iii] = current_line[1:]
+                        #remove also data pair with this datapoint
+                        data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
+                
+                #BASICALLY LIMITS LONGEST LINE TO 8 DATAPOINTS!!!
+                #try splitting line into two parts from the middle to lower mape
+                #does it when all lines haven't been found yet 
+                if len(combined[iii]) >= 8: #at least 8 datapoints needed
+                    
+                    middle_index = len(combined[iii])//2
+                    line_1st_half = combined[iii][:middle_index]
+                    #uneven numbers include one more element in the 2nd half
+                    line_2nd_half = combined[iii][middle_index:]
+                    
+                    #print(combined[iii][0],combined[iii][-1])
+                    #print(line_1st_half[0],line_1st_half[-1])
+                    #print(line_2nd_half[0],line_2nd_half[-1],"\n")
+                    #calculate if mape lowered significantly
+                    x = timestamp_indexing([datapoint[0] for datapoint in line_1st_half])
+                    y = [datapoint[1] for datapoint in line_1st_half] #diams
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape1 = cal_mape(x,y,popt)
+                    
+                    x = timestamp_indexing([datapoint[0] for datapoint in line_2nd_half])
+                    y = [datapoint[1] for datapoint in line_2nd_half]
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape2 = cal_mape(x,y,popt)
+                    
+                    #print([datapoint[0] for datapoint in line_1st_half])
+                    #print(x,y)
+                    #relative change in mape
+                    rel_diff1 = ((mape1-mape)/mape) * 100
+                    rel_diff2 = ((mape2-mape)/mape) * 100
+                    
+                    #print(mape1,mape2, mape)
+                    
+                    #print("relative differences:",rel_diff1,rel_diff2)
+                    
+                    #if mape improves (decreases) by 40% split line in two
+                    if rel_diff1 <= -40 or rel_diff2 <= -40:
+                        #remove the second half of current line and add it as its own line
+                        combined[iii] = line_1st_half
+                        combined.append(line_2nd_half)
+                        
+                        #remove from data_pairs also
+                        connecting_pair = [line_1st_half[-1],line_2nd_half[0]]
+                        data_pairs = [pair for pair in data_pairs if not np.array_equal(connecting_pair, pair)]
+                    
+                break
+            else: #keep looking for next datapoint until end of points if the next one isnt suitable
+                continue
+    
+    combined = [sorted(component, key=lambda x: x[0]) for component in combined] # Sort each individual component by timestamp
+    
+    return combined
+
+def combine_segments_verOLD(df):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
@@ -472,9 +668,9 @@ def combine_segments_ver2(df):
     #iterate through each datapoint to find suitable pairs of mode fitting datapoints
     for i, datapoint in enumerate(data_sorted):
         for ii in range(1,len(data_sorted)-i):
-            print(i,ii)
+            #print(i,ii)
             next_datapoint = data_sorted[i+ii] #always after current datapoint
-            time0, diam0 = datapoint
+            time0, diam0 = datapoint #current datapoint
             time1, diam1 = next_datapoint
             time_diff = abs(time1-time0)
             diam_diff = abs(diam1-diam0)
@@ -493,48 +689,74 @@ def combine_segments_ver2(df):
                 combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
                 combined_list = combined #now when we modify combined it wont affect the for loop
                 
-                if i < 30:
+                '''
+                if i >= 120 and i <= 130:
                     print([datapoint,next_datapoint])
                     print(combined)
-                
+                '''
                 #make a linear fit to check mape in each line of datapoints
                 for iii, line in enumerate(combined_list):
                     if len(line) <= 2: #pointless to analyze mape with less than 3 datapoints
                         continue #proceed to next line
-                    
-                    x = np.arange(len(line))
-                    y = [datapoint[1] for datapoint in line] #diams
-                    popt, mape = cal_mape(x,y)
+                    elif len(line) >= 3:
+                        x = timestamp_indexing([datapoint[0] for datapoint in line]) #times
+                        y = [datapoint[1] for datapoint in line] #diams
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape = cal_mape(x,y,popt)
+                    else:#THIS ISNT BEING USED CURRENTLY
+                        #do fit to previous datapoints and calculate mape with the new datapoint included
+                        x = timestamp_indexing([datapoint[0] for datapoint in line[:-1]]) #times (last datapoint excluded)
+                        y = [datapoint[1] for datapoint in line[:-1]] #diams (last datapoint excluded)
+                        popt, pcov = curve_fit(linear, x, y)
 
+                        #print("timestamps:",[datapoint[0] for datapoint in line[:-1]],"x:",x,"y:",y)
+                        #add newest datapoint back to x and y
+                        x = timestamp_indexing([datapoint[0] for datapoint in line])
+                        y = [datapoint[1] for datapoint in line]
+                        mape = cal_mape(x,y,popt)
+                        
+                        #check mape of the whole line also
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape = cal_mape(x,y,popt)
+                        
+                        #print("time0_index:",time0_index,"y_fit:","new x:",x,"new y:",y,"mape:",mape)
+                    
                     #mape threshold linearly gets stricter until 5 datapoints
                     #with 5 or more points threshold is 3% and with 3 points 5%
-                    mape_threshold = -1*len(line)+8 if len(line) < 5 else 3.2
+                    #mape_threshold = -1*len(line)+8 if len(line) < 5 else 3.2
+                    mape_threshold = 15*len(line)**(-1) #15*x^(-1)
+                    if mape_threshold > 3:
+                        mape_threshold = 3
                     
-                    if i < 30:
-                        print(mape, "threshold",mape_threshold)
-                    
+                    '''
+                    if i >= 120 and i <= 130:
+                        print("len(line)",len(line))
+                        print(line[-1],"mape",mape, "threshold",mape_threshold)
+                    '''
                     if mape > mape_threshold:
                         #calculate mape without first datapoint of line to see if mape is smaller
-                        x = np.arange(len(line[1:]))
+                        x = timestamp_indexing([datapoint[0] for datapoint in line[1:]])
                         y = [datapoint[1] for datapoint in line[1:]] #diams
-                        popt, mape = cal_mape(x,y)
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape = cal_mape(x,y,popt)
+                        
                         
                         if mape > mape_threshold: #if mape is still too big
                             #delete recently added datapoint from both lists
                             combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
                             data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)]
                             
-                            x = np.arange(len(line[:-2]))
-                            y = [datapoint[1] for datapoint in line[:-2]] #diams
-                            popt, mape = cal_mape(x,y) #update mape value
+                            x = timestamp_indexing([datapoint[0] for datapoint in line[:-1]])
+                            y = [datapoint[1] for datapoint in line[:-1]] #diams
+                            popt, pcov = curve_fit(linear, x, y)
+                            mape = cal_mape(x,y,popt) #update mape value
                         else:
-                            pass
                             #remove the first datapoint of the line
-                            #first_datapoint = line[0]
-                            #combined[iii] = line[1:]
+                            first_datapoint = line[0]
+                            combined[iii] = line[1:]
                             #remove also data pair with this datapoint
-                            #data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
-                    
+                            data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
+                            
                     
                     #try splitting line into two parts from the middle to lower mape
                     if len(combined[iii]) >= 8: #at least 8 datapoints needed
@@ -544,20 +766,22 @@ def combine_segments_ver2(df):
                         line_2nd_half = combined[iii][-middle_index:] if len(combined[iii])%2 == 0 else combined[iii][-(middle_index+1):]
 
                         #calculate if mape lowered significantly
-                        x = np.arange(len(line_1st_half))
+                        x = timestamp_indexing([datapoint[0] for datapoint in line_1st_half])
                         y = [datapoint[1] for datapoint in line_1st_half] #diams
-                        popt, mape1 = cal_mape(x,y)
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape1 = cal_mape(x,y,popt)
                         
-                        x = np.arange(len(line_2nd_half))
+                        x = timestamp_indexing([datapoint[0] for datapoint in line_2nd_half])
                         y = [datapoint[1] for datapoint in line_2nd_half]
-                        popt, mape2 = cal_mape(x,y)
+                        popt, pcov = curve_fit(linear, x, y)
+                        mape2 = cal_mape(x,y,popt)
                         
                         #relative change in mape
                         rel_diff1 = ((mape1-mape)/mape) * 100
                         rel_diff2 = ((mape2-mape)/mape) * 100
-                        
-                        #if mape improves (decreases) by 30% split line in two
-                        if rel_diff1 <= 30 and rel_diff2 <= 30:
+
+                        #if mape improves (decreases) by 40% split line in two
+                        if rel_diff1 <= -40 or rel_diff2 <= -40:
                             #remove the first half of current line and add it as its own line
                             combined[iii] = line_1st_half
                             combined.append(line_2nd_half)
@@ -609,7 +833,7 @@ def filter_segments_ver2(combined):
     for line in combined: 
         while True:
             try:
-                x = np.arange(len(line))
+                x = timestamp_indexing([datapoint[0] for datapoint in line])
                 y = [datapoint[1] for datapoint in line] #diams
                 
                 popt, pcov = curve_fit(linear, x, y)
@@ -650,8 +874,9 @@ def process_data(df, abr):
 
 ###
 def process_data_ver2(df):
-
+    start_time = time.time()
     comb_segs = combine_segments_ver2(df)
+    print("--- %s seconds ---" % (time.time() - start_time))
     print('Combined segments done! (1/2)')
     filter_segs = filter_segments_ver2(comb_segs)
     print('Filtering done! (2/2)')    
@@ -1060,7 +1285,7 @@ def plot2_ver2(filter_segs):
     
     df_GR_final = pd.DataFrame(columns=['start','end','d_initial','d_final','GR'])
     for i in range(len(time)):
-        x = np.arange(len(time[i])) #time
+        x = timestamp_indexing(time[i]) #time
         params, pcov = curve_fit(linear, x, diam[i])
         gr = params[0]*2 #unit to nm/h from nm/0.5h (due to how x is defined)
         diam_fit = params[0]*x + params[1]
