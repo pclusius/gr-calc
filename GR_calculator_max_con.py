@@ -7,6 +7,8 @@ from datetime import datetime
 from scipy.optimize import curve_fit
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import matplotlib.dates
 matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
 from operator import itemgetter
@@ -143,7 +145,11 @@ def closest(list, number):
     '''
     value = []
     for i in list:
-        value.append(abs(number-i))
+        try:
+            value.append(abs(number-i))
+        except TypeError:
+            value.append(tuple(abs(np.subtract(i,number))))
+        
     return value.index(min(value))
 def find_zero(dataframe):
     '''
@@ -327,7 +333,63 @@ def find_ranges():
             df_ranges.append(df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]])
             growth_rates.append(growth_rate) #save also the growth rates
 
+    #let's make sure the ranges do not overlap
+    ''' This creates wierdly shaped areas that will not give good results, filtering dots is better
+    df_ranges_nooveralp = df_ranges.copy()
+    
+    for i, df_range1 in enumerate(df_ranges):
+        start_time1 = df_range1.index[0]
+        end_time1 = df_range1.index[-1]
+        start_diam1 = df_range1.columns[0]
+        end_diam1 = df_range1.columns[-1]
+        
+        for df_range2 in df_ranges:
+            start_time2 = df_range2.index[0]
+            end_time2 = df_range2.index[-1]
+            start_diam2 = df_range2.columns[0]
+            end_diam2 = df_range2.columns[-1]
+            
+            if df_range1.columns.empty or df_range2.columns.empty:
+                continue
+            if df_range1.equals(df_range2):
+                continue
+            #print(df_range1)
+            #print(df_range2)
+            #print(df_ranges_nooveralp[i],"\n")
+            if start_time1 <= end_time2 and start_time2 <= end_time1: #times overlap
+                #check diameter overlap as well
+                if start_diam2 == start_diam1 and end_diam2 == end_diam1: #diameter edges are the same
+                    #crop range to avoid overlapping
+                    if start_time1 < start_time2: #first range on the left
+                        middle_time = (end_time1-start_time2)/2 + start_time2 #split from middle 
+                        df_ranges_nooveralp[i] = df_range1[df_range1.index < middle_time]  
+                    else: #other way around 
+                        middle_time = (end_time2-start_time1)/2 + start_time1
+                        df_ranges_nooveralp[i] = df_range1[df_range1.index >= middle_time]
+                elif start_diam2 >= start_diam1 and start_diam2 <= end_diam1: #second range is above first
+                    #crop range to avoid overlapping
+                    df_ranges_nooveralp[i] = df_range1[df_range1.columns[(df_range1.columns < start_diam2)]]           
+                elif end_diam2 >= start_diam1 and end_diam2 <= end_diam1: #second range is below first
+                    #crop range to avoid overlapping
+                    #print("before",df_ranges_nooveralp[i])
+                    df_ranges_nooveralp[i] = df_range1[df_range1.columns[(df_range1.columns >= end_diam2)]] 
+                    #print("after",df_ranges_nooveralp[i])
+                else:
+                    continue #overlap only with time but not diameter
+            else:
+                continue #no overlap
+    
+    ##print("---------")
+    #print(df_ranges[6])
+    #print(df_ranges_nooveralp[6])
+    #print("---------")
+    
+    #remove empty dfs
+    df_ranges_nooveralp = [df for df in df_ranges_nooveralp if not df.columns.empty]
+    '''
     return df_ranges, growth_rates
+
+df_ranges, growth_rates = find_ranges()
 
 def maximum_concentration(dataframe): 
     '''
@@ -552,12 +614,13 @@ def init_ranges():
     GRs_at = []
     dfs_mode_start = []
     dfs_mode_end = []
+    range_indices_mc = []
+    range_indices_at = []
 
     df_ranges, growth_rates = find_ranges()
 
-    for df_range,growth_rate in zip(df_ranges,growth_rates): #go through every range around GRs
+    for i,(df_range,growth_rate) in enumerate(zip(df_ranges,growth_rates)): #go through every range around GRs
         
-        #THESE MIGHT NOT BE FOUND IN ALL RANGES, GR??, try except for mc and at separately
         mc_x, mc_y, mc_z, mc_days, mc_params, dfs_start, dfs_end, threshold_deriv = maximum_concentration(df_range)
         at_x, at_y, at_z, at_days, at_params = appearance_time(df_range)
         
@@ -577,73 +640,104 @@ def init_ranges():
         GRs_mc = np.append(GRs_mc, growth_rate) #growth rates
         GRs_at = np.append(GRs_at, growth_rate)
         [dfs_mode_start.append(i) for i in dfs_start]
-        [dfs_mode_end.append(i) for i in dfs_end]       
+        [dfs_mode_end.append(i) for i in dfs_end]
+        
+        if len(mc_x) > 0: #range indices
+            for x in range(len(mc_x)):
+                range_indices_mc = np.append(range_indices_mc,i)
+        if len(at_x) > 0:
+            for x in range(len(at_x)):
+                range_indices_at = np.append(range_indices_at,i)
     
     #combine to same lists
-    maxcon_xyz = [maxcon_x,maxcon_y,maxcon_z]
-    appear_xyz = [appear_x,appear_y,appear_z]
+    maxcon_xyz = [maxcon_x,maxcon_y,maxcon_z,range_indices_mc] #add also which range it came from
+    appear_xyz = [appear_x,appear_y,appear_z,range_indices_at]
     
-    return maxcon_xyz, maxcon_x_days, mc_fitting_params, GRs_mc, appear_xyz, appear_x_days, at_fitting_params, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv
+    return maxcon_xyz, maxcon_x_days, mc_fitting_params, GRs_mc, appear_xyz, appear_x_days, \
+        at_fitting_params, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv, df_ranges
 
-xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv = init_ranges()
+xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, \
+    fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv, df_ranges = init_ranges()
 
 
-def filter_duplicates(list,time_days):
-    #TAKING A MEAN IS INACCURATE
-    
+def filter_duplicates(xyz,time_days,mtd):
+    '''
+    Filters duplicates of maximum concentration and appearance time 
+    methods if points are within mtd (maximum time difference).
+    Returns lists of datapoints without duplicated.
+    Picks point that is closest to the average distance of 
+    dublicate points from one of the ranges.
+    '''
+    filt_i = [] #list for indices of removed points
+
     #filter points that are basically the same but found with a different range
-    # to avoid many points in the same time/diam, take an average and set that as the new timestamp
     for i, diam in enumerate(df.columns.values): #loop through diameter values     
-        channel = [[list[0][j],list[1][j],list[2][j]] for j, d in enumerate(list[1]) if d == diam] #choose points that are in diam channel
-
+        channel = [[xyz[0][j],xyz[1][j],xyz[2][j]] for j, d in enumerate(xyz[1]) if d == diam] #choose points that are in diam channel
+        
         if len(channel) > 1: #if there are several points in one channel, check time difference
-            max_time_diff = 30/(60*24) #30min
+            max_time_diff = mtd
             
+            #find groups of similar times in this diameter channel and add them to a list
+            same_times_list = []
             for elem in channel: #loop through points in diam channel
                 time = elem[0]
                 same_times = [point[0] for point in channel if abs(point[0]-time) < timedelta(days=max_time_diff)] #list of times close to current time
+                
+                if same_times not in same_times_list and len(same_times) > 1: #length must be more than 1
+                    same_times_list.append(same_times)
 
+            #iterate over all groups of similar times
+            for same_time in same_times_list:      
                 #REMOVE DUPLICATES
-                x, y, z = list
-                t_d = time_days.copy()
+                x, y, z, ranges = xyz
 
-                #identify indices of elements to remove
-                mask_x = np.isin(x, same_times)
-                
-                if not any(mask_x): #if there are no True values in 'mask_x' 
-                    continue #go to next iteration
+                #identify elements and their indices to extract
+                mask_x = np.isin(x, same_time)
+                extracted_indices = [i for i,j in enumerate(mask_x) if j == True]    
+
+                #extract elements for calculations
+                extracted_times = x[mask_x]
+                extracted_ranges = ranges[mask_x]
+
+                #find out which range of the two dots are closer to their average time 
+                #take mean time of all dots and compare it to the mean time of the lines
+                average_time = pd.to_datetime(pd.Series(extracted_times)).mean()
+                df_GR_values = df_GR_final #use calculated values in Gabi's code
+
+                #loop through the modefitting lines (ranges) where removed points where found in
+                avg_line_location = []
+                for index in extracted_ranges:
+                    t_start = df_GR_values['start'][index]
+                    t_end = df_GR_values['end'][index]
+                    d_start = df_GR_values['d_initial'][index]
+                    d_end = df_GR_values['d_final'][index]
                     
-                #extract removed elements for averaging
-                removed_times = x[mask_x]
-                removed_z_values = z[mask_x]
-                removed_time_days = time_days[mask_x]
-                
-                #remove the identified elements
-                x = x[~mask_x]
-                y = y[~mask_x]
-                z = z[~mask_x]
-                t_d = t_d[~mask_x]
-                
-                #calculate averages of removed elements
-                #average_time = np.mean(removed_times).astype("datetime64[ms]")
-                average_time = pd.to_datetime(pd.Series(removed_times)).mean()
-                average_conc = np.mean(removed_z_values)
-                average_time_days = np.mean(removed_time_days)
+                    t_mean = t_start + (t_end-t_start)/2
+                    d_mean = (d_start+d_end)/2
+                    avg_line_location.append((t_mean,d_mean))
 
-                #add the averages to the remaining data
-                times = np.append(x, average_time)
-                diams = np.append(y, diam)
-                concs = np.append(z, average_conc)
-                time_days_list = np.append(t_d,average_time_days)
+                #calculate which range (index) is closest to the dots
+                closest_line_i = closest(avg_line_location,(average_time,diam))
                 
-                #update xyz and time_days
-                list = [times, diams, concs]
-                time_days = time_days_list
+                #define the indices of the points to be removed
+                removed_indices = np.delete(extracted_indices,closest_line_i)
 
-    return list, time_days
+                #save them to a list
+                for ix in removed_indices:
+                    filt_i.append(ix)
+               
+    #filter duplicates
+    xyz[0] = np.delete(xyz[0],filt_i)
+    xyz[1] = np.delete(xyz[1],filt_i)
+    xyz[2] = np.delete(xyz[2],filt_i)
+    xyz[3] = np.delete(xyz[3],filt_i)
+    time_days = np.delete(time_days,filt_i)
 
-#xyz_maxcon, x_maxcon_days = filter_duplicates(xyz_maxcon,x_maxcon_days)
-#xyz_appear, x_appear_days = filter_duplicates(xyz_appear,x_appear_days)
+    return xyz, time_days, filt_i
+
+xyz_maxcon, x_maxcon_days, filt_i_mc = filter_duplicates(xyz_maxcon,x_maxcon_days,mtd=90/(60*24)) 
+xyz_appear, x_appear_days, filt_i_at = filter_duplicates(xyz_appear,x_appear_days,mtd=90/(60*24))
+#mtd = maximum time difference between similar stars (in days)
 
 
 #################### GR DATA ######################
@@ -1139,7 +1233,7 @@ def plot_manual_GR(times,diams,time_range,diam_range):
     midpoint_value = x[midpoint_idx]
     plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
 
-def plot_PSD(dataframe):
+def plot_PSD(dataframe,draw_rectangles=False):
     '''
     Plots dots for maximum concentration and 
     appearance time methods.
@@ -1167,6 +1261,28 @@ def plot_PSD(dataframe):
         robust_fit(time_seg_mc, diam_seg_mc,"white")
         robust_fit(time_seg_at, diam_seg_at,"green")
     
+    #range rectangles
+    if draw_rectangles == True:
+        for df_range in df_ranges:
+            start_time = df_range.index[0]
+            end_time = df_range.index[-1]
+            start_diam = df_range.columns[0]
+            end_diam = df_range.columns[-1]
+            
+            #convert to matplotlib date representation
+            start_time = mdates.date2num(start_time.to_pydatetime())
+            end_time = mdates.date2num(end_time.to_pydatetime())
+            
+            width = abs(start_time-end_time)
+            height = abs(start_diam-end_diam)
+            
+            #print("start time date2num:",start_time)
+            #print("end time date2num:",end_time)
+            
+            rect = patches.Rectangle((start_time, start_diam), width, height, linewidth=0.7, linestyle='--', edgecolor='black', facecolor='none')
+            ax.add_patch(rect)
+
+    
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
     for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
@@ -1178,7 +1294,7 @@ def plot_PSD(dataframe):
     plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
     plt.xlabel("time",fontsize=14) #add y-axis label
     ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
-plot_PSD(df)
+plot_PSD(df,draw_rectangles=False)
 
 def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     '''
@@ -1193,11 +1309,23 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     '''   
     
     '''1 assemble all datasets'''
-    xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv = init_ranges()
-
+    xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_mc, xyz_appear, x_appear_days, \
+        fitting_parameters_logi, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv, df_ranges = init_ranges()
+    
+    '''filter excess'''
+    xyz_maxcon, x_maxcon_days, filt_i_mc = filter_duplicates(xyz_maxcon,x_maxcon_days,mtd=90/(60*24)) 
+    xyz_appear, x_appear_days, filt_i_at = filter_duplicates(xyz_appear,x_appear_days,mtd=90/(60*24))
+    #mtd = maximum time difference between similar stars (in days)
+    
+    #filter also other variables
+    fitting_parameters_gaus = [j for i, j in enumerate(fitting_parameters_gaus) if i not in filt_i_mc]
+    fitting_parameters_logi = [j for i, j in enumerate(fitting_parameters_logi) if i not in filt_i_at]
+    GRs_mc = [j for i, j in enumerate(GRs_mc) if i not in filt_i_mc]
+    GRs_at = [j for i, j in enumerate(GRs_at) if i not in filt_i_at]
+    
     '''1.5 (if a specific range is wanted) choose range that is plotted and modify datasets accodingly'''
     if choose_GR != None: 
-        gr_indices = [i for i, x in enumerate(GRs_maxcon) if x == choose_GR] #maximum concentration 
+        gr_indices = [i for i, x in enumerate(GRs_mc) if x == choose_GR] #maximum concentration 
         xyz_maxcon[0] = [xyz_maxcon[0][i] for i in gr_indices]
         xyz_maxcon[1] = [xyz_maxcon[1][i] for i in gr_indices]
         dfs_mode_start = [dfs_mode_start[i] for i in gr_indices]
@@ -1205,7 +1333,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         xyz_maxcon[2] = [xyz_maxcon[2][i] for i in gr_indices]
         fitting_parameters_gaus = [fitting_parameters_gaus[i] for i in gr_indices]
 
-        gr_indices = [i for i, x in enumerate(GRs_appear) if x == choose_GR] #appearance time
+        gr_indices = [i for i, x in enumerate(GRs_at) if x == choose_GR] #appearance time
         xyz_appear[0] = [xyz_appear[0][i] for i in gr_indices]
         xyz_appear[1] = [xyz_appear[1][i] for i in gr_indices]
         xyz_appear[2] = [xyz_appear[2][i] for i in gr_indices]
@@ -1481,7 +1609,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     green_star2.set_markeredgecolor("black")
     
     fig.tight_layout()
-#plot_channel(df,[df.columns[10],df.columns[11],df.columns[12]],choose_GR=None,draw_range_edges=False) #DOESNT WORK WITH ONLY ONE GRAPH!!
+#plot_channel(df,diameter_list=[df.columns[6],df.columns[7],df.columns[8]],choose_GR=None,draw_range_edges=False) #DOESNT WORK WITH ONLY ONE GRAPH!!
 
 plt.show()
 
