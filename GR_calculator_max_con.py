@@ -1,14 +1,12 @@
 from GR_calculator_unfer_v2_modified import * 
 import numpy as np
 import pandas as pd
-import datetime
-from datetime import timedelta
 from datetime import datetime
+from datetime import timedelta
 from scipy.optimize import curve_fit
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import matplotlib.dates
 matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
 from operator import itemgetter
@@ -25,11 +23,11 @@ This code assumes dmps data.
 - 3rd column onwards till the end (under diameters):    concentrations, dN/dlog(dp)
 '''
 
-################ DATA FORMATTING ################
+################# DATA FORMATTING #################
 folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
 file_names = file_names #copy paths from the file "GR_calculator_unfer_v2_modified"
 
-#let's define three useful functions
+#let's define two useful functions
 def combine_data(): 
     '''
     Loads dmps data for given days.
@@ -52,27 +50,6 @@ def combine_data():
     
     combined_data = pd.concat(dfs,axis=0,ignore_index=True) #combine dataframes
     return combined_data
-def days_into_UTC(data):
-    '''
-    Changes time from days to UTC.
-    Takes in data which can be a df, list or just one date.
-    Returns the times in UTC.
-    '''
-    try:
-        time_steps = data["time (d)"] - time_d[0] #calculate timesteps between every timestamp
-        start_date_str = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00" #define start date
-        start_datetime = datetime.strptime(start_date_str, "%Y-%m-%d %H:%M:%S") #change to date time
-        data["time (d)"] = [start_datetime + timedelta(days=i) for i in time_steps] #converting timesteps to datetime
-        return data
-    except:
-        time_steps = data - time_d[0]
-        start_date_str = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00"
-        start_datetime = datetime.strptime(start_date_str, "%Y-%m-%d %H:%M:%S")
-        try: #converting timesteps to datetime
-            data = [start_datetime + timedelta(days=i) for i in time_steps] 
-        except: #in case the list has just one element
-            data = start_datetime + timedelta(days=time_steps)
-        return data
 def avg_filter(dataframe,resolution):
     '''
     Smoothens data in dataframe with average filter and given resolution (minutes), 
@@ -105,23 +82,17 @@ def avg_filter(dataframe,resolution):
     for dp in dataframe.columns:
         for ts in irrelevant_ts:
             dataframe.loc[ts,dp] = np.nan #set nan value for irrelevant datapoints
-            dataframe = dataframe.dropna() #remove these rows
+            dataframe = dataframe.dropna() #remove these rows   
 
-    #add nan values for missing timestamps
-    time_d_res = time_d.copy()
-    for k in missing_ts_i:
-        time_d_res = np.insert(time_d_res,k,np.nan)
-    
-    time_d_res = [time_d_res[i] + 0.25/24 for i in range(0,len(time_d_res)-1,int(resolution/10))] #save time in days with new resolution
-    time_d_res = [j for i, j in enumerate(time_d_res) if i not in irrelevant_i] #remove irrelevant times    
-
-    return dataframe, np.array(time_d_res)
+    return dataframe
 
 df = combine_data()
 df.rename(columns=dict(zip(df.columns[[0,1]], ["time (d)", "total number concentration (N)"])), inplace=True) #rename first two columns
 df = df.drop(['total number concentration (N)'], axis=1) #drop total N concentrations from the dataframe as they're not needed
-time_d = df['time (d)'].values.astype(float) #save time as days before changing them to UTC
-df = days_into_UTC(df)
+
+#days to UTC times
+df["time (d)"] = df["time (d)"] - df["time (d)"][0] #substract first day
+df["time (d)"] = pd.Series(mdates.num2date(df["time (d)"])).dt.tz_localize(None)
 
 #set new UTC timestamps as indices
 df.rename(columns={'time (d)': 'time (UTC)'}, inplace=True)
@@ -130,13 +101,12 @@ df.index=df['time (UTC)']
 df = df.drop(['time (UTC)'], axis=1)
 
 df.columns = pd.to_numeric(df.columns) * 10**9 #set numerical diameters as column headers, units from m to nm
-#df.to_csv('./data_original.csv', sep=',', header=True, index=True, na_rep='nan')
-df, time_d_res = avg_filter(df,resolution=30) #filtering
+df = avg_filter(df,resolution=30) #filtering
 
 #with this we can check the format
 #df.to_csv('./data_filtered.csv', sep=',', header=True, index=True, na_rep='nan')
 
-####################################################
+#################### FUNCTIONS #####################
 #useful functions
 def closest(list, number):
     '''
@@ -151,17 +121,6 @@ def closest(list, number):
             value.append(tuple(abs(np.subtract(i,number))))
         
     return value.index(min(value))
-def find_zero(dataframe):
-    '''
-    Finds all zeros in a dataframe and creates a new dataframe where zeros are kept and all other values are nans.
-    Returns dataframe with zeros and nans.
-    '''
-    df_zero_deriv = pd.DataFrame(np.nan, index=dataframe.index[1:], columns=dataframe.columns)
-    
-    for i in dataframe.columns:
-        zero_value = dataframe[i] == 0
-        df_zero_deriv[i] = dataframe[i].where(zero_value, np.nan)
-    return df_zero_deriv
 def flatten_list(list):
     '''
     Takes in a list of lists and
@@ -204,6 +163,23 @@ def cal_mape(x,y,popt):
     absolute_error = np.abs(linear(x, *popt) - y)
     mape = np.mean(absolute_error / y) * 100
     return mape
+def cal_derivative(dataframe):
+    '''
+    Calculates 1st derivatives between neighbouring datapoints. 
+    Takes in dataframe and wanted range of time in days (in case of smaller dataframes).
+    Returns dataframe with derivatives.
+    '''
+    df_derivatives = pd.DataFrame(np.nan, index=dataframe.index[1:], columns=dataframe.columns) 
+    
+    #convert time to days 
+    time_days = mdates.date2num(dataframe.index)
+    
+    for i in dataframe.columns: 
+        N = dataframe[i] #concentration
+        time = time_days * 24 * 60 * 60 #change days to seconds
+        dNdt = np.diff(N)/np.diff(time) #derivative
+        df_derivatives.loc[:, i] = dNdt #add calculated derivatives to dataframe
+    return  df_derivatives
 
 #define mathematical functions for fitting
 def gaussian(x,a,x0,sigma): 
@@ -215,20 +191,8 @@ def linear(x,k,b):
 def logarithmic(x):
     return np.log(x)
 
-def cal_1st_derivative(dataframe,time_days):
-    '''
-    Calculates 1st derivatives between neighbouring datapoints. 
-    Takes in dataframe and wanted range of time in days (in case of smaller dataframes).
-    Returns dataframe with derivatives.
-    '''
-    df_derivatives = pd.DataFrame(np.nan, index=dataframe.index[1:], columns=dataframe.columns) 
-    
-    for i in dataframe.columns: 
-        N = dataframe[i] #concentration
-        time = time_days * 24 * 60 * 60 #change days to seconds
-        dNdt = np.diff(N)/np.diff(time) #derivative
-        df_derivatives.loc[:, i] = dNdt #add calculated derivatives to dataframe
-    return  df_derivatives
+#################### METHODS #######################
+
 def find_modes(dataframe,df_deriv,threshold_deriv):
     '''
     Finds modes with derivative threshold.
@@ -237,32 +201,28 @@ def find_modes(dataframe,df_deriv,threshold_deriv):
     and the wanted derivative threshold.
     Returns dataframe with found modes.
     '''
-
+    #initialize variables
     df_modes = pd.DataFrame(np.nan, index=dataframe.index, columns=dataframe.columns) 
-
-    #threshold that determines what is a high concentration
-    threshold = abs(df_deriv) > threshold_deriv #checks which values surpass the threshold
-    start_points = threshold & (~threshold.shift(1,fill_value=False)) #find start points (df)
-
-    #finding values within start and end points
     start_time = None 
     end_time = None
 
+    #define a threshold that determines what is a high concentration
+    threshold = df_deriv > threshold_deriv #checks which values surpass the threshold
+    start_points = threshold & (~threshold.shift(1,fill_value=False)) #find start points (type: df)   
+    #threshold.to_csv('./threshold_df.csv', sep=',', header=True, index=True, na_rep='nan') 
+    #start_points.to_csv('./start_points.csv', sep=',', header=True, index=True, na_rep='nan')
+    
+    #iterate over diameter channels
     for diam in df_deriv.columns:
-        for timestamp in df_deriv.index: #identify pairs of start and end times
-            if start_time != None: #when a start time has been found find list of values between start/end times
-                subset = dataframe[diam].loc[start_time:end_time]
-                df_modes.loc[subset.index,diam] = subset #fill dataframe with mode ranges
-                
-                #restart initial values
-                start_time = None 
-                end_time = None                     
-                                  
-            elif start_points.loc[timestamp,diam] == True and df_deriv.loc[timestamp,diam] > 0: #checks also if the starting point derivative is neg or not
-                start_time = timestamp
-                start_conc = df_deriv.loc[timestamp,diam]
+        #iterate over timestamps for each diameter channel
+        for timestamp in df_deriv.index: 
 
-                #finding end time after local maximum concentration 
+            #starting point found for a horizontal "mode"
+            if start_points.loc[timestamp,diam] == True: 
+                start_time = timestamp
+                start_conc = dataframe.loc[timestamp,diam]
+
+                #find end time after local maximum concentration 
                 '''
                 try:
                     subset_end_i = dataframe.index.get_loc(start_time) + 14
@@ -273,25 +233,99 @@ def find_modes(dataframe,df_deriv,threshold_deriv):
                 subset_end = dataframe.index[-1]
                 
                 df_subset = dataframe.loc[start_time:subset_end,diam] #subset from mode start to (mode start + 140mins) unless mode start is near the end of a range
-                end_conc = ( max(df_subset.values) + start_conc ) / 2  #(N_max + N_start)/2
-                max_conc_time = df_subset.index[df_subset == max(df_subset.values)].tolist()[0] #rough estimate of maximum concentration time 
+                df_deriv_subset = df_deriv.loc[start_time:subset_end,diam]
+                
+                #find local concentration maxima
+                df_subset_left = df_subset.shift(-1)
+                df_subset_right = df_subset.shift(1)
+                df_subset_maxima = (df_subset_left < df_subset) & (df_subset > df_subset_right)
+
+                #check that concentrations decreases at least two timesteps forward after the maxima
+                for i,value in enumerate(df_subset_maxima.values):
+                    if value == True:
+                        conc = df_subset.values[i]
+                        next_conc = df_subset.values[i+1]
+                        
+                        #if we reach the end of a subset
+                        try:
+                            nextnext_conc = df_subset.values[i+2]
+                            
+                            #filter maximum if conditions not met
+                            if conc < next_conc or next_conc < nextnext_conc:
+                                
+                                #CONTINTUE HERE LATER
+                                if conc > next_conc:
+                                    conc = nextnext_conc
+                                    next_conc = df_subset.values[i+3]
+                                    nextnext_conc = df_subset.values[i+4]
+                                    
+                                    if conc > next_conc or next_conc > nextnext_conc:
+                                        continue
+                                
+                                df_subset_maxima.values[i] = False
+                        except IndexError:
+                            df_subset_maxima.values[i] = False #filter maxima at the end
+                            
+                #if no True values left dont bother finding horizontal mode
+                if not df_subset_maxima.any():
+                    break
+                
+                #choose closest maximum after start time
+                for i in range(len(df_subset_maxima.values)):
+                    if df_subset_maxima.index[i] > start_time and df_subset_maxima.values[i] == True:
+                        closest_maximum = df_subset.values[i]
+                        break
+                #CONTINUE HERE
+                print(df_subset)
+                print(df_subset_maxima)
+                if diam == 19.030848000000002:
+                    print(df_subset)
+
+                    print("df_subset_maxima")
+                    print(df_subset_maxima)
+                    
+                    print("start_time",start_time)
+                    print("closest maximum",closest_maximum)
+
+                
+                # end_conc = ( max(df_subset.values) + start_conc ) / 2  #(N_max + N_start)/2
+                # max_conc_time = df_subset.index[df_subset == max(df_subset.values)].tolist()[0] #rough estimate of maximum concentration time 
+
+                
+                end_conc = (closest_maximum + start_conc ) / 2  #(N_max + N_start)/2
+                max_conc_time = df_subset.index[df_subset == closest_maximum].tolist()[0] #rough estimate of maximum concentration time 
                 max_conc_time_i = dataframe.index.get_loc(max_conc_time) #index of max_conc_time
                 
+                #new ending limit to find end concentration time, same distance from max conc time as start time is
                 try:
-                    new_subset_end = dataframe.index[max_conc_time_i + (max_conc_time_i - dataframe.index.get_loc(start_time))] #new ending limit to find end concentration time, same distance from max conc time as start time is
+                    new_subset_end = dataframe.index[max_conc_time_i + (max_conc_time_i - dataframe.index.get_loc(start_time))] 
                 except IndexError:
                     new_subset_end = dataframe.index[-1] #limits to range aroung GRs
                 
                 end_conc_i = closest(dataframe.loc[max_conc_time:new_subset_end,diam],end_conc) #index of end point
-                end_time = dataframe.index[end_conc_i+max_conc_time_i] 
+                end_time = dataframe.index[end_conc_i+max_conc_time_i] #end time found!
 
-                if start_time == end_time: #skip modes with same start/end time
+                print("start_time",start_time,"end_time",end_time)
+                #skip modes with same start or end time
+                if start_time == end_time:
                     start_time = None
                     end_time = None
+            
+            #when a start time has been found fill df with concentrations between start and end time
+            elif start_time != None: 
+                subset = dataframe[diam].loc[start_time:end_time]
+                df_modes.loc[subset.index,diam] = subset #fill dataframe
                 
+                #restart initial values
+                start_time = None 
+                end_time = None 
+            
+            #keep iterating over timestamps for starting points of horizontal "modes"
             else:
                 continue
-    return df_modes
+            
+    #df_modes.to_csv('./find_modes.csv', sep=',', header=True, index=True, na_rep='nan')
+    return df_modes, threshold_deriv
 def find_ranges(): 
     '''
     Finds ranges around growth rates from previously calculated mode fitting data.
@@ -333,65 +367,10 @@ def find_ranges():
             df_ranges.append(df_mfit_con[df_mfit_con.columns[(df_mfit_con.columns >= start_diam) & (df_mfit_con.columns <= end_diam)]])
             growth_rates.append(growth_rate) #save also the growth rates
 
-    #let's make sure the ranges do not overlap
-    ''' This creates wierdly shaped areas that will not give good results, filtering dots is better
-    df_ranges_nooveralp = df_ranges.copy()
-    
-    for i, df_range1 in enumerate(df_ranges):
-        start_time1 = df_range1.index[0]
-        end_time1 = df_range1.index[-1]
-        start_diam1 = df_range1.columns[0]
-        end_diam1 = df_range1.columns[-1]
-        
-        for df_range2 in df_ranges:
-            start_time2 = df_range2.index[0]
-            end_time2 = df_range2.index[-1]
-            start_diam2 = df_range2.columns[0]
-            end_diam2 = df_range2.columns[-1]
-            
-            if df_range1.columns.empty or df_range2.columns.empty:
-                continue
-            if df_range1.equals(df_range2):
-                continue
-            #print(df_range1)
-            #print(df_range2)
-            #print(df_ranges_nooveralp[i],"\n")
-            if start_time1 <= end_time2 and start_time2 <= end_time1: #times overlap
-                #check diameter overlap as well
-                if start_diam2 == start_diam1 and end_diam2 == end_diam1: #diameter edges are the same
-                    #crop range to avoid overlapping
-                    if start_time1 < start_time2: #first range on the left
-                        middle_time = (end_time1-start_time2)/2 + start_time2 #split from middle 
-                        df_ranges_nooveralp[i] = df_range1[df_range1.index < middle_time]  
-                    else: #other way around 
-                        middle_time = (end_time2-start_time1)/2 + start_time1
-                        df_ranges_nooveralp[i] = df_range1[df_range1.index >= middle_time]
-                elif start_diam2 >= start_diam1 and start_diam2 <= end_diam1: #second range is above first
-                    #crop range to avoid overlapping
-                    df_ranges_nooveralp[i] = df_range1[df_range1.columns[(df_range1.columns < start_diam2)]]           
-                elif end_diam2 >= start_diam1 and end_diam2 <= end_diam1: #second range is below first
-                    #crop range to avoid overlapping
-                    #print("before",df_ranges_nooveralp[i])
-                    df_ranges_nooveralp[i] = df_range1[df_range1.columns[(df_range1.columns >= end_diam2)]] 
-                    #print("after",df_ranges_nooveralp[i])
-                else:
-                    continue #overlap only with time but not diameter
-            else:
-                continue #no overlap
-    
-    ##print("---------")
-    #print(df_ranges[6])
-    #print(df_ranges_nooveralp[6])
-    #print("---------")
-    
-    #remove empty dfs
-    df_ranges_nooveralp = [df for df in df_ranges_nooveralp if not df.columns.empty]
-    '''
     return df_ranges, growth_rates
-
 df_ranges, growth_rates = find_ranges()
 
-def maximum_concentration(dataframe): 
+def maximum_concentration(df_modes): 
     '''
     Calculates the maximum concentration.
     Takes in dataframe from wanted area in the PSD.
@@ -401,7 +380,7 @@ def maximum_concentration(dataframe):
     max_conc =              list of maximum concentrations in corresponding datapoints
     maxcon_x_days =         list of time in days
     fitting_params =        list of gaussian fit parameters and more:
-                            [[start time of mode in days, end time of mode in days,
+                            [[start time of mode UTC, end time of mode UTC,
                             parameter A, parameter mu, parameter sigma], ...]
     dfs_mode_start =        list of dfs with start of mode
     dfs_mode_end =          list of dfs with end of mode
@@ -415,26 +394,19 @@ def maximum_concentration(dataframe):
     
     dfs_mode_start = []
     dfs_mode_end = []
-
-    threshold_deriv = 0.05 #choose derivative threshold
     
     #times to days
-    time_range = df.index.intersection(dataframe.index) #find matching indices
-    indices = [df.index.get_loc(row) for row in time_range]
-    time_d_range = time_d_res[indices] #define time in days again depending on chosen range
-    
-    df_deriv = cal_1st_derivative(dataframe,time_days=time_d_range) #calculate derivative
-    df_modes = find_modes(dataframe,df_deriv,threshold_deriv=threshold_deriv) #find modes 
+    t_d = mdates.date2num(df_modes.index)
 
     #gaussian fit to every mode
     for dp_index in range(len(df_modes.columns)):
         x = [] #time
         y = [] #concentration
         for t_index in range(len(df_modes.index)):
-            time = time_d_range[t_index]
+            time = t_d[t_index]
             concentration = df_modes.iloc[t_index,dp_index] #find concentration values from the dataframe i.e range (y)
-
-            if np.isnan(concentration) and len(y) != 0: #gaussian fit when all values of one mode have been added to the y list
+            
+            if np.isnan(concentration) and len(y) > 2: #gaussian fit when all values of one mode have been added to the y list
                 #gaussian fit to get maximum concentration values
                 #rescaling for a more stable fitting
                 x_min = np.min(x) 
@@ -457,15 +429,17 @@ def maximum_concentration(dataframe):
                         max_conc = np.append(max_conc,popt[0]+y_min) #maximum concentrations
                         
                         #create dfs with start and end points
-                        df_mode_start = pd.DataFrame(np.nan, index=dataframe.index, columns=dataframe.columns)
-                        df_mode_end = pd.DataFrame(np.nan, index=dataframe.index, columns=dataframe.columns)
+                        df_mode_start = pd.DataFrame(np.nan, index=df_modes.index, columns=df_modes.columns)
+                        df_mode_end = pd.DataFrame(np.nan, index=df_modes.index, columns=df_modes.columns)
                         
-                        start_time_days = x[0]+x_min  #define start/end time (days)
+                        start_time_days = x[0]+x_min
                         end_time_days = x[-1]+x_min
                         
-                        start_time_UTC = pd.Series(days_into_UTC(start_time_days-0.25/24)).dt.round('30min')[0] #UTC, rounded to the nearest 30min increment
-                        end_time_UTC = pd.Series(days_into_UTC(end_time_days-0.25/24)).dt.round('30min')[0]
-                        start_time_UTC += timedelta(minutes=15) #makes it easier to round
+                        start_time_UTC = mdates.num2date(start_time_days-0.25/24).replace(tzinfo=None)
+                        start_time_UTC = pd.Series(start_time_UTC).dt.round('30min')[0] #rounded to the nearest 30min increment
+                        start_time_UTC += timedelta(minutes=15) #shift 15mins forward
+                        end_time_UTC = mdates.num2date(end_time_days-0.25/24).replace(tzinfo=None)
+                        end_time_UTC = pd.Series(end_time_UTC).dt.round('30min')[0]
                         end_time_UTC += timedelta(minutes=15)
                         
                         df_mode_start.loc[start_time_UTC,df_modes.columns[dp_index]] = y[0]+y_min #replace nan value with concentration value at start/end point
@@ -475,7 +449,7 @@ def maximum_concentration(dataframe):
                         dfs_mode_end.append(df_mode_end)
                         
                         #gaussian fit parameters with start and end times and minimum concentration of horizontal mode
-                        fitting_params.append([start_time_days, end_time_days, popt[0]+y_min, popt[1]+x_min, popt[2]])                               
+                        fitting_params.append([start_time_UTC, end_time_UTC, popt[0]+y_min, popt[1]+x_min, popt[2]])                               
                 except:
                     print("Diverges. Skipping.")
                                     
@@ -484,16 +458,14 @@ def maximum_concentration(dataframe):
             elif not np.isnan(concentration): #separates mode values
                 x = np.append(x,time)
                 y = np.append(y,concentration)
-            elif np.isnan(concentration): #skips nan values
-                x = [] #reset
-                y = [] 
 
-    maxcon_x_days = max_conc_time #save maximum concentration time in days as well
-    max_conc_time = np.array(days_into_UTC(max_conc_time)) #change days to UTC in the list of max concentration times
-
-    return max_conc_time, max_conc_diameter, max_conc, maxcon_x_days, fitting_params, dfs_mode_start, dfs_mode_end, threshold_deriv
-def appearance_time(dataframe):
-    '''
+    #convert time to UTC
+    max_conc_time = [dt.replace(tzinfo=None) for dt in mdates.num2date(max_conc_time)]
+    max_conc_time = np.array(max_conc_time)
+    
+    return max_conc_time, max_conc_diameter, max_conc, fitting_params, dfs_mode_start, dfs_mode_end
+def appearance_time(df_modes):
+    '''max_conc_time
     Calculates the appearance times.
     Takes in dataframe from wanted area in the PSD.
     Returns:
@@ -512,22 +484,17 @@ def appearance_time(dataframe):
     fitting_params = []
     
     #times to days
-    time_range = df.index.intersection(dataframe.index) #find matching indices
-    indices = [df.index.get_loc(row) for row in time_range]
-    time_d_range = time_d_res[indices] #define time in days again depending on chosen range
-    
-    df_deriv = cal_1st_derivative(dataframe,time_days=time_d_range) #calculate derivative
-    df_modes = find_modes(dataframe,df_deriv,threshold_deriv=0.05) #find modes
+    t_d = mdates.date2num(df_modes.index)
 
     #logistic fit to every mode
     for dp_index in range(len(df_modes.columns)):
         x = [] #time
         y = [] #concentration
         for t_index in range(len(df_modes.index)):
-            time = time_d_range[t_index]
+            time = t_d[t_index]
             concentration = df_modes.iloc[t_index,dp_index] #find concentration values from the dataframe (y)    
 
-            if np.isnan(concentration) and len(y) != 0: #logistic fit when all values of one mode have been added to the y list 
+            if np.isnan(concentration) and len(y) > 2: #logistic fit when all values of one mode have been added to the y list 
                 #gaussian fit to get maximum concentration values
                 #rescaling for a more stable fitting
                 x_min = np.min(x) 
@@ -567,9 +534,20 @@ def appearance_time(dataframe):
                                     appear_time = np.append(appear_time,popt[1]+x_min) #make a list of times with the appearance time in each diameter
                                     appear_diameter = np.append(appear_diameter,float(df_modes.columns[dp_index])) 
                                     mid_conc.append((popt[0]+y_min)/2) #appearance time concentration (~50% maximum concentration), L/2, y_min to preserve shape of graph
+                                    
+                                    #convert time to UTC
+                                    start_time_days = x[0]+x_min
+                                    end_time_days = x[-1]+x_min
+                                    
+                                    start_time_UTC = mdates.num2date(start_time_days-0.25/24).replace(tzinfo=None)
+                                    start_time_UTC = pd.Series(start_time_UTC).dt.round('30min')[0] #rounded to the nearest 30min increment
+                                    start_time_UTC += timedelta(minutes=15) #shift 15mins forward
+                                    end_time_UTC = mdates.num2date(end_time_days-0.25/24).replace(tzinfo=None)
+                                    end_time_UTC = pd.Series(end_time_UTC).dt.round('30min')[0]
+                                    end_time_UTC += timedelta(minutes=15)
 
                                     #logistic fit parameters with time range and minimum concentration of horizontal mode
-                                    fitting_params.append([x[0]+x_min, x[-1]+x_min, popt[0]+y_min, popt[1]+x_min, popt[2]])                                 
+                                    fitting_params.append([start_time_UTC, end_time_UTC, popt[0]+y_min, popt[1]+x_min, popt[2]])                                 
                             except:
                                 print("Logistic diverges. Skipping.")
                         else:
@@ -582,15 +560,13 @@ def appearance_time(dataframe):
             elif not np.isnan(concentration): #separates mode values
                 x = np.append(x,time)
                 y = np.append(y,concentration)
-            elif np.isnan(concentration): #skips nan values
-                x = [] #reset
-                y = []
 
-    appear_x_days = appear_time #save appearance time in days as well
-    appear_time = np.array(days_into_UTC(appear_time)) #change days to UTC in the list of max concentration times
+    #convert time to UTC
+    appear_time = [dt.replace(tzinfo=None) for dt in mdates.num2date(appear_time)]
+    appear_time = np.array(appear_time)
 
-    return appear_time, appear_diameter, mid_conc, appear_x_days, fitting_params
-def init_ranges():
+    return appear_time, appear_diameter, mid_conc, fitting_params
+def init_ranges(choose_range_i):
     '''
     Goes through all ranges and calculates the points for maximum concentration
     and appearance time methods along with other useful information.
@@ -600,14 +576,12 @@ def init_ranges():
     maxcon_x = []
     maxcon_y = []
     maxcon_z = []
-    maxcon_x_days = []
     mc_fitting_params = []
     
     appear_xyz = [] #appearance time
     appear_x = []
     appear_y = []
     appear_z = []
-    appear_x_days = []
     at_fitting_params = []
     
     GRs_mc = [] #growth rates of each range (around mode fitting)
@@ -618,21 +592,29 @@ def init_ranges():
     range_indices_at = []
 
     df_ranges, growth_rates = find_ranges()
+    
+    if choose_range_i != None:
+        df_ranges = [x for i,x in enumerate(df_ranges) if i == choose_range_i]
+        growth_rates = [x for i,x in enumerate(growth_rates) if i == choose_range_i]
+
+        print("**************************")
+        print("Mode fitting growth rates:",growth_rates)
 
     for i,(df_range,growth_rate) in enumerate(zip(df_ranges,growth_rates)): #go through every range around GRs
         
-        mc_x, mc_y, mc_z, mc_days, mc_params, dfs_start, dfs_end, threshold_deriv = maximum_concentration(df_range)
-        at_x, at_y, at_z, at_days, at_params = appearance_time(df_range)
+        df_deriv = cal_derivative(df_range) #calculate derivative
+        df_modes, threshold_deriv = find_modes(df_range,df_deriv,threshold_deriv=0.06) #find modes
+        
+        mc_x, mc_y, mc_z, mc_params, dfs_start, dfs_end = maximum_concentration(df_modes)
+        at_x, at_y, at_z, at_params = appearance_time(df_modes)
         
         #add to lists
         maxcon_x = np.append(maxcon_x,mc_x) #maximum concentration
-        maxcon_x_days = np.append(maxcon_x_days,mc_days)
         maxcon_y = np.append(maxcon_y,mc_y)
         maxcon_z = np.append(maxcon_z,mc_z)
         [mc_fitting_params.append(i) for i in mc_params]
         
         appear_x = np.append(appear_x,at_x) #appearance time
-        appear_x_days = np.append(appear_x_days,at_days)
         appear_y = np.append(appear_y,at_y)
         appear_z = np.append(appear_z,at_z)
         [at_fitting_params.append(i) for i in at_params]
@@ -653,14 +635,11 @@ def init_ranges():
     maxcon_xyz = [maxcon_x,maxcon_y,maxcon_z,range_indices_mc] #add also which range it came from
     appear_xyz = [appear_x,appear_y,appear_z,range_indices_at]
     
-    return maxcon_xyz, maxcon_x_days, mc_fitting_params, GRs_mc, appear_xyz, appear_x_days, \
-        at_fitting_params, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv, df_ranges
+    return maxcon_xyz, appear_xyz, df_ranges, mc_fitting_params, at_fitting_params, GRs_mc, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv
 
-xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_maxcon, xyz_appear, x_appear_days, \
-    fitting_parameters_logi, GRs_appear, dfs_mode_start, dfs_mode_end, threshold_deriv, df_ranges = init_ranges()
+xyz_maxcon, xyz_appear, df_ranges, *others = init_ranges(choose_range_i=25)
 
-
-def filter_duplicates(xyz,time_days,mtd):
+def filter_duplicates(xyz,mtd):
     '''
     Filters duplicates of maximum concentration and appearance time 
     methods if points are within mtd (maximum time difference).
@@ -671,7 +650,7 @@ def filter_duplicates(xyz,time_days,mtd):
     filt_i = [] #list for indices of removed points
 
     #filter points that are basically the same but found with a different range
-    for i, diam in enumerate(df.columns.values): #loop through diameter values     
+    for diam in df.columns.values: #loop through diameter values     
         channel = [[xyz[0][j],xyz[1][j],xyz[2][j]] for j, d in enumerate(xyz[1]) if d == diam] #choose points that are in diam channel
         
         if len(channel) > 1: #if there are several points in one channel, check time difference
@@ -731,16 +710,14 @@ def filter_duplicates(xyz,time_days,mtd):
     xyz[1] = np.delete(xyz[1],filt_i)
     xyz[2] = np.delete(xyz[2],filt_i)
     xyz[3] = np.delete(xyz[3],filt_i)
-    time_days = np.delete(time_days,filt_i)
+    
+    return xyz, filt_i
 
-    return xyz, time_days, filt_i
-
-xyz_maxcon, x_maxcon_days, filt_i_mc = filter_duplicates(xyz_maxcon,x_maxcon_days,mtd=90/(60*24)) 
-xyz_appear, x_appear_days, filt_i_at = filter_duplicates(xyz_appear,x_appear_days,mtd=90/(60*24))
+xyz_maxcon, filt_i_mc = filter_duplicates(xyz_maxcon,mtd=90/(60*24)) 
+xyz_appear, filt_i_at = filter_duplicates(xyz_appear,mtd=90/(60*24))
 #mtd = maximum time difference between similar stars (in days)
 
-
-#################### GR DATA ######################
+################## GROWTH RATES ####################
 
 def find_dots(times,diams):
     '''
@@ -754,7 +731,10 @@ def find_dots(times,diams):
     
     Returns:
     list: Combined lists of nearby datapoints.
-    ''' 
+    '''
+    #convert time to days
+    times = mdates.date2num(times)
+    
     #combine to the same list and sort data by diameter
     data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1,0))) #[[time1,diam1],[time2,diam2]...]
 
@@ -778,7 +758,7 @@ def find_dots(times,diams):
                 continue
             
             #closest datapoint
-            nearby_datapoint = tuple(min(channel_points, key=lambda point: abs(point[0] - time0))) #!!!
+            nearby_datapoint = tuple(min(channel_points, key=lambda point: abs(point[0] - time0)))
             time_diff = abs(nearby_datapoint[0] - time0)
             
             max_time_diff = base_max_time_diff #MAKE THIS BETTER LATER
@@ -815,16 +795,16 @@ def find_dots(times,diams):
                     mape = cal_mape(x,y,popt)
 
 
-                
-                mape_threshold = 0.1*len(current_line)**(-1) #0.01*x^(-1)
+                mape_threshold = 7*len(current_line)**(-1) #15*x^(-1) #UUHM??
+                #mape_threshold = 0.1*len(current_line)**(-1) #0.01*x^(-1)
                 #if mape_threshold > 0.025:
                 #    mape_threshold = 0.025
             
-                if len(current_line) == 11:
-                    print(mape)
+                #if len(current_line) == 11:
+                #    print(mape)
                 #print("threshold:",mape_threshold)    
                 
-                
+                #print("mape:",mape, "threshold:",mape_threshold)
                 if mape > mape_threshold:
                     #calculate mape without first datapoint of line to see if mape is smaller
                     x = [datapoint[1] for datapoint in current_line[1:]]
@@ -889,189 +869,6 @@ def find_dots(times,diams):
     combined = [sorted(component, key=lambda x: x[1]) for component in combined] # Sort each individual component by diameter
     
     return combined
-
-def find_dotsOLD(times,diams):
-    '''
-    Finds nearby datapoints based on time and diameter constraints.
-    Fits linear curve to test if datapoints are close enough.
-    Returns lists with wanted times and diameters for plotting growth rates.
-    
-    Parameters:
-    times (list): List of time values.
-    diams (list): List of corresponding diameter values.
-    
-    Returns:
-    list: Combined lists of nearby datapoints.
-    ''' 
-    #combine to the same list and sort data by diameter
-    data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1,0))) #[[time1,diam1],[time2,diam2]...]
-
-    data_pairs = []
-    base_max_time_diff = 150/(60*24) #max time difference in days = 150mins = 2,5h
-    higher_max_time_diff = 180/(60*24) #180mins = 3h
-    
-    #iterate through each datapoint to find suitable pairs of mode fitting datapoints
-    for i, datapoint in enumerate(data_sorted):
-        for ii in range(1,len(data_sorted)-i):
-            next_datapoint = data_sorted[i+ii] #always after current datapoint
-            time0, diam0 = datapoint
-            time1, diam1 = next_datapoint
-            time_diff = abs(time1-time0)
-            diam_diff = abs(diam1-diam0)
-
-            #diam difference in channels changes in a logarithmic scale
-            nextnext_diam = df.columns.values[df.columns.values > diam0][1] #diameter in the channel one after
-            max_diam_diff = abs(diam0-nextnext_diam) #max one diameter channel empty in between
-            
-            #at higher diameters allow longer time difference between stars
-            max_time_diff = higher_max_time_diff
-
-            """
-            if i >= 60:
-                print("current datapoint",datapoint,"next_datapoint",next_datapoint)
-                print("nextnext_diam",nextnext_diam)
-                print("max_diam_diff",max_diam_diff)
-            """
-            if diam_diff > max_diam_diff: #if diam difference is already too, big break loop
-                print("diam difference is too big")
-                break
-            elif time_diff <= max_time_diff and diam_diff <= max_diam_diff: #check time and diameter difference
-                data_pairs.append([datapoint,next_datapoint]) #add nearby datapoint pairs to list
-                combined = combine_connected_pairs(data_pairs) #combine overlapping pairs to make lines
-                combined_list = combined #now when we modify combined it wont affect the for loop
-                
-                '''
-                if i >= 30 and i <=45:
-                    print(i,ii)
-                    print([datapoint,next_datapoint])
-                    print(combined)
-                '''
-                #make a linear fit to check mape in each line of datapoints
-                for iii, line in enumerate(combined_list):
-                    if len(line) <= 2: #pointless to analyze mape with less than 3 datapoints
-                        continue #proceed to next line
-                    
-                    x = [datapoint[1] for datapoint in line] #diams
-                    y = [datapoint[0] for datapoint in line] #times                 
-                    popt, pcov = curve_fit(linear, x, y)
-                    mape = cal_mape(x,y,popt)
-                    GR2 = 1/(popt[0]*24) #growth rate
-                    
-                    #lets calculate the previous growth rate as well to compare them
-                    x = [datapoint[1] for datapoint in line[:-1]] #diams
-                    y = [datapoint[0] for datapoint in line[:-1]] #times                 
-                    popt, pcov = curve_fit(linear, x, y)
-                    mape = cal_mape(x,y,popt)
-                    GR1 = 1/(popt[0]*24) #growth rate
-                    
-                    #precentual change
-                    GR_change = abs((GR1-GR2)/GR2) * 100
-                    #print("GR_change",GR_change)
-                    #if growth rate changes more than 85%
-                    if GR_change >= 85:
-                        #delete recently added datapoint from both lists
-                        combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
-                        data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
-                    
-                    '''
-                    relation = abs(GR / line[-1][1])
-                    
-                    if relation > 0.10 and relation < 0.20:
-                        max_time_diff = 150/(60*24)
-                    else:
-                        max_time_diff = 120/(60*24)
-                    '''    
-                    
-                    
-                    '''
-                    Mape is not the same in different scales so here the threshold must be stricter
-                    Mape threshold linearly gets stricter until 5 datapoints
-                    With 5 or more points threshold is 0.02% and with 3 points 0.03%'''
-                    mape_threshold = -0.0025*len(line)+0.04 if len(line) < 5 else 0.025
-                    
-                    if i >= 20 and i <= 45:
-                        print("mape_threshold",mape_threshold)
-                        print("first mape",mape)
-                    
-                    if mape > mape_threshold:
-                        #calculate mape without first datapoint of line to see if mape is smaller
-                        x = [datapoint[1] for datapoint in line[1:]]
-                        y = [datapoint[0] for datapoint in line[1:]] #times
-                        popt, pcov = curve_fit(linear, x, y)
-                        mape = cal_mape(x,y,popt)
-                        
-                        if mape > mape_threshold: #if mape is still too big
-                            #delete recently added datapoint from both lists
-                            combined = [[point for point in component if any(point != next_datapoint)] for component in combined] 
-                            data_pairs = [pair for pair in data_pairs if not any(np.array_equal(next_datapoint, point) for point in pair)] 
-                        
-                            x = [datapoint[1] for datapoint in line[:-1]]
-                            y = [datapoint[0] for datapoint in line[:-1]] #times
-                            popt, pcov = curve_fit(linear, x, y)
-                            mape = cal_mape(x,y,popt) #update mape value
-                        else:
-                            pass
-                            #remove the first datapoint of the line
-                            #first_datapoint = line[0]
-                            #combined[iii] = line[1:]
-                            #remove also data pair with this datapoint
-                            #data_pairs = [pair for pair in data_pairs if not any(np.array_equal(first_datapoint, point) for point in pair)]
-                    
-                    """
-                    #try splitting line into two parts from the middle to lower mape
-                    if len(combined[iii]) >= 8: #at least 8 datapoints needed
-                        middle_index = int(len(combined[iii])/2) #rounding down with int()
-                        line_1st_half = combined[iii][:middle_index]
-                        #uneven numbers include one more element in the 2nd half
-                        line_2nd_half = combined[iii][-middle_index:] if len(combined[iii])%2 == 0 else combined[iii][-(middle_index+1):]
-
-                        #calculate if mape lowered significantly
-                        x = [datapoint[1] for datapoint in line_1st_half]
-                        y = [datapoint[0] for datapoint in line_1st_half] #times
-                        popt, mape1 = cal_mape(x,y)
-                        
-                        x = [datapoint[1] for datapoint in line_2nd_half]
-                        y = [datapoint[0] for datapoint in line_2nd_half] #times
-                        popt, mape2 = cal_mape(x,y)
-                        
-                        #relative change in mape
-                        rel_diff1 = ((mape1-mape)/mape) * 100
-                        rel_diff2 = ((mape2-mape)/mape) * 100
-                        
-                        #if mape improves (decreases) by 30% split line in two
-                        if rel_diff1 <= 60 and rel_diff2 <= 60:
-                            #remove the first half of current line and add it as its own line
-                            combined[iii] = line_1st_half
-                            combined.append(line_2nd_half)    
-                        """
-                        
-                break
-            else: #keep looking for next datapoint until end of points if the next one isnt suitable
-                continue
-    
-    '''
-    for line in combined:
-        #diam_diff = abs(line[0][1]-line[-1][1])
-        #relation = diam_diff / line[-1][1]
-        
-        if len(line) > 3:
-            x = [datapoint[1] for datapoint in line] #diams
-            y = [datapoint[0] for datapoint in line] #times                 
-            popt, mape = cal_mape(x,y)
-            GR = 1/(popt[0]*24) #growth rate
-            relation = abs(GR / line[-1][1])
-            
-            #print("\nlast time",line[-1][0])
-            #print("growth rate",GR)
-            #print("diam diff",diam_diff,"relation",relation)
-        '''
-        
-    
-    
-    combined = [sorted(component, key=lambda x: x[1]) for component in combined] # Sort each individual component by diameter
-    
-    return combined
-
 def filter_dots(datapoints):
     '''
     Filter datapoints of lines that are too short or
@@ -1108,8 +905,8 @@ def filter_dots(datapoints):
 def init_find():
     
     #find consequtive datapoints
-    mc_data = find_dots(times= x_maxcon_days,diams= xyz_maxcon[1]) #maximum concentration
-    at_data = find_dots(times= x_appear_days,diams= xyz_appear[1]) #appearance time
+    mc_data = find_dots(times= xyz_maxcon[0],diams= xyz_maxcon[1]) #maximum concentration
+    at_data = find_dots(times= xyz_appear[0],diams= xyz_appear[1]) #appearance time
     
     #filter series of datapoints that are too short or with high deviation
     mc_filtered = filter_dots(mc_data)
@@ -1153,8 +950,8 @@ def robust_fit(time,diam,color):
     t_params = rlm_results.params
 
     if len(t_params) > 1: #sometimes lines with datapoints that all have the same diameter, REMOVE WHEN FILTERING IS FIXED
-        #change times to UTC
-        time_UTC_rlm = np.array(days_into_UTC(t_rlm)) #change days into UTC
+        #change days to UTC
+        time_UTC_rlm = [dt.replace(tzinfo=None) for dt in mdates.num2date(t_rlm)]
 
         #growth rate annotation
         gr = 1/(t_params[1]*24) #unit to nm/h from time in days
@@ -1169,7 +966,6 @@ def robust_fit(time,diam,color):
         #print("Statsmodel robus linear model results: \n",rlm_results.summary())
         #print("\nparameters: ",rlm_results.params)
         #print(help(sm.RLM.fit))
-
 def linear_fit(time,diam):
     '''
     y = time in days
@@ -1181,7 +977,9 @@ def linear_fit(time,diam):
     popt, pcov = curve_fit(linear, diam, time) #linear diam
     gr = 1/(popt[0]*24) #unit to nm/h from time in days
     time_fit = popt[0]*np.array(diam) + popt[1]
-    time_UTC = np.array(days_into_UTC(time_fit)) #change days into UTC
+    
+    #convert days to UTC
+    time_UTC = [dt.replace(tzinfo=None) for dt in mdates.num2date(time_fit)]
 
     #plotting
     plt.plot(time_UTC,diam,lw=3) #line
@@ -1189,48 +987,6 @@ def linear_fit(time,diam):
     midpoint_idx = len(time_fit) // 2 #growth rate value
     midpoint_time = time_UTC[midpoint_idx]
     midpoint_value = diam[midpoint_idx]
-    plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
-def plot_manual_GR(times,diams,time_range,diam_range):
-    '''
-    Plots growth rates from chosen range of either method's dots. 
-    Takes in the x and y values of determined maximum concentrations / appearance times and their wanted range.
-    time_range = [time1,time2]
-    diam_range = [diam1,diam2]
-    #plot_manual_GR(x_maxcon_days,xyz_maxcon[1],["2016-06-12 10:30:00","2016-06-12 12:30:00"],[9,25]) #maximum concentration
-    #plot_manual_GR(x_appear_days,xyz_appear[1],["2016-06-12 08:00:00","2016-06-12 12:00:00"],[5.5,30]) #appearance time
-    '''
-    #change strings to days from start of measurement
-    time_range_days = []
-    for i in time_range:
-        i = datetime.strptime(i, "%Y-%m-%d %H:%M:%S")
-        start_of_day = datetime(i.year, i.month, i.day)
-        days_from_start = (i - start_of_day) / timedelta(days=1)
-        time_range_days.append(time_d[0] + days_from_start)
-
-    #choose wanted dots
-    sub_times = []
-    sub_diams = []
-    for time,diam in zip(times,diams):
-        if time >= time_range_days[0] and time <= time_range_days[1] and diam >= diam_range[0] and diam <= diam_range[1]:
-            sub_times = np.append(sub_times,time)
-            sub_diams = np.append(sub_diams,diam)
-
-    x = np.sort(sub_diams) #flip due to variability in time 
-    y = np.sort(sub_times)
-
-    #linear least square fits
-    #popt, pcov = curve_fit(linear, np.log(x), y) #logarthmic x
-    popt, pcov = curve_fit(linear, x, y) #linear x
-    gr = 1/(popt[0]*24) #unit to nm/h from time in days
-    y_fit = popt[0]*x + popt[1] #TOOK LOG(x) AWAY
-    x_UTC = np.array(days_into_UTC(y_fit)) #change days into UTC
-
-    #plotting
-    plt.plot(x_UTC,x,lw=3) #line
-    
-    midpoint_idx = len(y_fit) // 2 #growth rate value
-    midpoint_time = x_UTC[midpoint_idx]
-    midpoint_value = x[midpoint_idx]
     plt.annotate(f'{gr:.2f} nm/h', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
 
 def plot_PSD(dataframe,draw_rectangles=False):
@@ -1254,12 +1010,12 @@ def plot_PSD(dataframe,draw_rectangles=False):
     plt.plot(xyz_appear[0], xyz_appear[1], '*', alpha=0.5, color='green', ms=5,label='appearance time')
     
     #growth rates
-    time_mc, diam_mc, time_at, diam_at = init_find()
-    for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
-        #linear_fit(time_seg_mc, diam_seg_mc) #maximum concentration
-        #linear_fit(time_seg_at, diam_seg_at) #appearance time
-        robust_fit(time_seg_mc, diam_seg_mc,"white")
-        robust_fit(time_seg_at, diam_seg_at,"green")
+    # time_mc, diam_mc, time_at, diam_at = init_find()
+    # for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
+    #     #linear_fit(time_seg_mc, diam_seg_mc) #maximum concentration
+    #     #linear_fit(time_seg_at, diam_seg_at) #appearance time
+    #     robust_fit(time_seg_mc, diam_seg_mc,"white")
+    #     robust_fit(time_seg_at, diam_seg_at,"green")
     
     #range rectangles
     if draw_rectangles == True:
@@ -1270,14 +1026,11 @@ def plot_PSD(dataframe,draw_rectangles=False):
             end_diam = df_range.columns[-1]
             
             #convert to matplotlib date representation
-            start_time = mdates.date2num(start_time.to_pydatetime())
-            end_time = mdates.date2num(end_time.to_pydatetime())
+            start_time = mdates.date2num(start_time)
+            end_time = mdates.date2num(end_time)
             
             width = abs(start_time-end_time)
             height = abs(start_diam-end_diam)
-            
-            #print("start time date2num:",start_time)
-            #print("end time date2num:",end_time)
             
             rect = patches.Rectangle((start_time, start_diam), width, height, linewidth=0.7, linestyle='--', edgecolor='black', facecolor='none')
             ax.add_patch(rect)
@@ -1294,9 +1047,9 @@ def plot_PSD(dataframe,draw_rectangles=False):
     plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
     plt.xlabel("time",fontsize=14) #add y-axis label
     ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
-plot_PSD(df,draw_rectangles=False)
+plot_PSD(df,draw_rectangles=True)
 
-def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
+def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges,choose_range_i):
     '''
     Plots chosen diameter channels over UTC time, with thresholds and gaussian fit.
     ax[0,0] = whole channel over time, with ranges      ax[0,1] = derivative of concentrations
@@ -1309,12 +1062,12 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     '''   
     
     '''1 assemble all datasets'''
-    xyz_maxcon, x_maxcon_days, fitting_parameters_gaus, GRs_mc, xyz_appear, x_appear_days, \
-        fitting_parameters_logi, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv, df_ranges = init_ranges()
+    xyz_maxcon, xyz_appear, df_ranges, fitting_parameters_gaus, fitting_parameters_logi, \
+        GRs_mc, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv = init_ranges(choose_range_i=choose_range_i) 
     
     '''filter excess'''
-    xyz_maxcon, x_maxcon_days, filt_i_mc = filter_duplicates(xyz_maxcon,x_maxcon_days,mtd=90/(60*24)) 
-    xyz_appear, x_appear_days, filt_i_at = filter_duplicates(xyz_appear,x_appear_days,mtd=90/(60*24))
+    xyz_maxcon, filt_i_mc = filter_duplicates(xyz_maxcon,mtd=90/(60*24)) 
+    xyz_appear, filt_i_at = filter_duplicates(xyz_appear,mtd=90/(60*24))
     #mtd = maximum time difference between similar stars (in days)
     
     #filter also other variables
@@ -1322,7 +1075,10 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     fitting_parameters_logi = [j for i, j in enumerate(fitting_parameters_logi) if i not in filt_i_at]
     GRs_mc = [j for i, j in enumerate(GRs_mc) if i not in filt_i_mc]
     GRs_at = [j for i, j in enumerate(GRs_at) if i not in filt_i_at]
+    dfs_mode_start = [j for i, j in enumerate(dfs_mode_start) if i not in filt_i_mc]
+    dfs_mode_end = [j for i, j in enumerate(dfs_mode_end) if i not in filt_i_mc]
     
+
     '''1.5 (if a specific range is wanted) choose range that is plotted and modify datasets accodingly'''
     if choose_GR != None: 
         gr_indices = [i for i, x in enumerate(GRs_mc) if x == choose_GR] #maximum concentration 
@@ -1343,8 +1099,8 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     mode_edges = []             #[(diameter,start_time (UTC),end_time (UTC)), ...]
     range_edges = []            #[(diameter,start_time (UTC),end_time (UTC)), ...]
     xy_maxcon =  []             #[(max con diameter, max con time (UTC), max con), ...]
-    fitting_params_gaus = []    #[(max con diameter, mode start time (days), mode end time (days), *params...), ...]
-    fitting_params_logi = []    #[(appearance time diameter, mode start time (days), mode end time (days), *params...), ...]
+    fitting_params_gaus = []    #[(max con diameter, mode start time UTC, mode end time UTC, *params...), ...]
+    fitting_params_logi = []    #[(appearance time diameter, mode start time UTC, mode end time UTC, *params...), ...]
     mode_times_UTC = []         #[(diameter, time UTC), ...]
     appearances = []            #[(diameter, time (UTC), concentration), ...] 
 
@@ -1396,7 +1152,10 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     '''4 plotting'''
     fig, ax1 = plt.subplots(len(diameter_list),2,figsize=(9, 4.7), dpi=300)
     fig.subplots_adjust(wspace=0.38, hspace=0.29) #adjust spaces between subplots
- #parameters
+    ax1 = np.atleast_2d(ax1) #to avoid problems with plotting only one channel
+    lines_and_labels = set() #later use for legends
+    
+    #parameters
     #define x and y for the whole channel
     x = dataframe.index #time
     y_list = [dataframe[diam] for diam in diameter_list] #concentrations
@@ -1437,42 +1196,30 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         ax2.set_yscale('log')
 
         #gaussian & logistic fit for both scales
-        #we need time in days
-        mode_times_days = []
-        for i in mode_times_UTC:
-            time_range = df.index.intersection(i[1]) #find matching indices
-            indices = [df.index.get_loc(row) for row in time_range]
-            mode_times_days.append(time_d_res[indices]) #define time in days again depending on chosen range
-
-        
         #gaussian
         for params in fitting_params_gaus:
             diam, start_time, end_time, a, mu, sigma = params
-            
-            #change days into UTC
-            start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24)).dt.round('30min')[0] 
-            end_time_UTC = pd.Series(days_into_UTC(end_time-0.25/24)).dt.round('30min')[0]
-            start_time_UTC += timedelta(minutes=15) #makes it easier to round
-            end_time_UTC += timedelta(minutes=15)
 
-            for time_UTC,time_days in zip(mode_times_UTC,mode_times_days):
-                if diam == diameter_list[row_num] and time_UTC[1][0] == start_time_UTC and time_UTC[1][-1] == end_time_UTC: #check that plotting happens in the right mode
+            for time_UTC in mode_times_UTC:
+                if diam == diameter_list[row_num] and time_UTC[1][0] == start_time and time_UTC[1][-1] == end_time: #check that plotting happens in the right mode
+                    #convert time to days
+                    time_days = mdates.date2num(time_UTC[1])
+                    
                     line2, = ax1[row_num,0].plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
+                    lines_and_labels.add((line2,"gaussian fit"))
                     ax2.plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
         
         #logistic
         for params in fitting_params_logi:
             diam, start_time, end_time, L, x0, k = params
-            
-            #change days into UTC
-            start_time_UTC = pd.Series(days_into_UTC(start_time-0.25/24)).dt.round('30min')[0] 
-            end_time_UTC = pd.Series(days_into_UTC(end_time-0.25/24)).dt.round('30min')[0]
-            start_time_UTC += timedelta(minutes=15) #makes it easier to round
-            end_time_UTC += timedelta(minutes=15)
 
-            for time_UTC,time_days in zip(mode_times_UTC,mode_times_days):     
-                if diam == diameter_list[row_num] and time_UTC[1][0] == start_time_UTC and time_UTC[1][-1] == end_time_UTC: #check that plotting happens in the right mode
+            for time_UTC in mode_times_UTC:     
+                if diam == diameter_list[row_num] and time_UTC[1][0] == start_time and time_UTC[1][-1] == end_time: #check that plotting happens in the right mode
+                    #convert time to days
+                    time_days = mdates.date2num(time_UTC[1])
+                    
                     line3, = ax1[row_num,0].plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="gold",lw=1.2)
+                    lines_and_labels.add((line3,"logistic fit"))
                     ax2.plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="gold",lw=1.2)
 
         #maximum concentration
@@ -1480,6 +1227,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             diam, x_maxcon, y_maxcon = i
             if diam == diameter_list[row_num]:
                 line4, = ax1[row_num,0].plot(x_maxcon, y_maxcon, '*', color="white", ms=5, mew=0.6,alpha=0.8)
+                lines_and_labels.add((line4,"maximum concentration"))
                 ax2.plot(x_maxcon, y_maxcon, '*', color="white", ms=5, mew=0.6,alpha=0.8)
 
         #appearance time
@@ -1487,6 +1235,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             diam, time, conc = i
             if diam == diameter_list[row_num]:
                 line5, = ax1[row_num,0].plot(time, conc, '*', color="green", ms=5, mew=0.6,alpha=0.8)
+                lines_and_labels.add((line5,"appearance time"))
                 ax2.plot(time, conc, '*', color="green", ms=5, mew=0.6,alpha=0.8)
         
         ax1[row_num,0].set_xlim(dataframe.index[0],dataframe.index[-1])
@@ -1494,12 +1243,12 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
         #ax1[row_num,0].xaxis.set_tick_params(rotation=30)
         ax1[row_num,0].ticklabel_format(axis="y",style="sci",scilimits=(0,0))
         ax1[row_num,0].xaxis.set_major_formatter(mdates.DateFormatter("%H"))
-        if row_num == 0:
-            ax1[row_num,0].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+        #if row_num == 0:
+        #    ax1[row_num,0].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
 
 
     #PLOTS ON THE RIGHT
-    df_1st_derivatives = cal_1st_derivative(df,time_days=time_d_res)
+    df_1st_derivatives = cal_derivative(df)
 
     x = df_1st_derivatives.index #time
     y_list = [df_1st_derivatives[diam] for diam in diameter_list] #concentrations
@@ -1520,7 +1269,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             item.set_fontweight("bold")
         ax1[row_num,1].tick_params(axis='y', labelcolor=color1)
         line6 = ax1[row_num,1].axhline(y=threshold_deriv, color="royalblue", linestyle='--', lw=1)
-        ax1[row_num,1].axhline(y= -threshold_deriv, color="royalblue", linestyle='--', lw=1)
+        lines_and_labels.add((line6,f"threshold = {str(threshold_deriv)}"))
         
         #start and end points of modes
         found_ranges = []
@@ -1528,6 +1277,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
             diam, start, end = edges
             if diam == diameter_list[row_num] and edges not in found_ranges:
                 line7 = ax1[row_num,1].axvspan(start, end, alpha=0.18, color='darkorange')
+                lines_and_labels.add((line7,"mode edges"))
                 found_ranges.append(edges) #plot the same range once              
         
         if draw_range_edges == True:
@@ -1537,6 +1287,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
                 diam, start, end = edges
                 if diam == diameter_list[row_num] and edges not in found_ranges:
                     line8 = ax1[row_num,1].axvspan(start, end, alpha=0.2, color='gray')
+                    lines_and_labels.add((line8,"range"))
                     found_ranges.append(edges) #plot the same range once
 
         #maximum concentration
@@ -1554,13 +1305,15 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
                 ax1[row_num,1].plot(time, conc, '*', color="green", ms=5, mew=0.6,alpha=0.8)
                 ax2.plot(time, conc, '*', color="green", ms=5, mew=0.6,alpha=0.8)
 
+        
         ax1[row_num,1].set_xlim(dataframe.index[1],dataframe.index[-1])
         ax1[row_num,1].set_ylim(-0.2,0.2)
         ax1[row_num,1].set_facecolor("lightgray")
         #ax1[row_num,1].xaxis.set_tick_params(rotation=30) #rotating x-axis labels
         ax1[row_num,1].xaxis.set_major_formatter(mdates.DateFormatter("%H"))
-        if row_num == 0:
-            ax1[row_num,1].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+        #if row_num == 0:
+        #    ax1[row_num,1].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+        
 
         """ Logarithmic derivate
         #right axis
@@ -1583,34 +1336,67 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges):
     ax1[len(diameter_list)-1,0].set_xlabel("time (h)", fontsize=8, fontweight="bold")
     ax1[len(diameter_list)-1,1].set_xlabel("time (h)", fontsize=8, fontweight="bold")
     
+    
     #common legends
-    #ax1[0,0].legend([line1,line2,line3,line4,line5],["mode edges","gaussian fit","logistic fit","maximum concentration","appearance time"],fancybox=False,framealpha=0.9,loc='upper center', bbox_to_anchor=(0.85, 1.8), fontsize=8)
-    legend_1 = ax1[0,0].legend([line2,line3,line4,line5,line7],["gaussian fit","logistic fit","maximum concentration","appearance time","mode edges"],fancybox=False,framealpha=0.9, fontsize=4, loc="upper right")
+    #unzip the valid entries into separate lists for the legend
+    if len(lines_and_labels) <= 2:
+        return print("This diameter channel(s) has no fits!\n**************************")
+
+
+    #filter duplicates
+    lines_and_labels = {entry[1]: entry for entry in lines_and_labels}
+    lines_and_labels = set(lines_and_labels.values())
+
+    #print(lines_and_labels)
+    #left plots
+    lines_and_labels1 = [elem for elem in lines_and_labels if elem[1] in ["gaussian fit","logistic fit","maximum concentration","appearance time","mode edges"]]
+    valid_lines, valid_labels = zip(*lines_and_labels1)
+    legend_1 = ax1[0, 0].legend(valid_lines, valid_labels, fancybox=False, framealpha=0.9, fontsize=4, loc="upper right")
+    
+    #right plots
+    if draw_range_edges == True:
+        lines_and_labels2 = [elem for elem in lines_and_labels if elem[1] in ["maximum concentration","appearance time","mode edges","range",f"threshold = {str(threshold_deriv)}"]]
+    else:
+        lines_and_labels2 = [elem for elem in lines_and_labels if elem[1] in ["maximum concentration","appearance time","mode edges",f"threshold = {str(threshold_deriv)}"]]
+        
+    valid_lines, valid_labels = zip(*lines_and_labels2)
+    legend_2 = ax1[0, 1].legend(valid_lines, valid_labels, fancybox=False, framealpha=0.9, fontsize=4, loc="upper right")
     legend_1.remove() #to have the legend on top of graph lines
     legend_11 = ax2.add_artist(legend_1)
     
-    if draw_range_edges == True:
-        legend_2 = ax1[0,1].legend([line4,line5,line7,line8,line6],["maximum concentration","appearance time","mode edges","range",f"threshold = {str(threshold_deriv)}"],fancybox=False,framealpha=0.9, loc='upper right', fontsize=4)
-    else:
-        legend_2 = ax1[0,1].legend([line4,line5,line7,line6],["maximum concentration","appearance time","mode edges",f"threshold = {str(threshold_deriv)}"],fancybox=False,framealpha=0.9, loc='upper right', fontsize=4)
     
     #set black edges to star markers in the legend
-    white_star11 = legend_11.legend_handles[2]
-    green_star11 = legend_11.legend_handles[3]
-    white_star2 = legend_2.legend_handles[0]
-    green_star2 = legend_2.legend_handles[1]
-    white_star11.set_markeredgewidth(0.4)
-    green_star11.set_markeredgewidth(0.4)
-    white_star11.set_markeredgecolor("black")
-    green_star11.set_markeredgecolor("black")
-    white_star2.set_markeredgewidth(0.4)
-    green_star2.set_markeredgewidth(0.4)
-    white_star2.set_markeredgecolor("black")
-    green_star2.set_markeredgecolor("black")
+    #indices of right legend handles
+    white_star11_i = [i for i,line_label in enumerate(lines_and_labels1) if line_label[1] == "maximum concentration"]
+    green_star11_i = [i for i,line_label in enumerate(lines_and_labels1) if line_label[1] == "appearance time"]
+    white_star2_i = [i for i,line_label in enumerate(lines_and_labels2) if line_label[1] == "maximum concentration"]
+    green_star2_i = [i for i,line_label in enumerate(lines_and_labels2) if line_label[1] == "appearance time"]
+    #legend handles
+    white_star11 = [legend_11.legend_handles[i] for i in white_star11_i]
+    green_star11 = [legend_11.legend_handles[i] for i in green_star11_i]
+    white_star2 = [legend_2.legend_handles[i] for i in white_star2_i]
+    green_star2 = [legend_2.legend_handles[i] for i in green_star2_i]
+    #setting black edges
+    stars = [white_star11,green_star11,white_star2,green_star2]
+    for star in stars:
+        if star:
+            star[0].set_markeredgewidth(0.4)
+            star[0].set_markeredgecolor("black")
+
+    
+    #plot line when day changes
+    new_day = None
+    for i in dataframe.index:
+        day = i.strftime("%d")  
+        if day != new_day:
+            i = i - timedelta(minutes=15) #shift back 15mins due to resolution change
+            for row_num in range(len(y_list)):
+                ax1[row_num,0].axvline(x=i, color='black', linestyle='-', lw=0.8)
+                ax1[row_num,1].axvline(x=i, color='black', linestyle='-', lw=0.8)
+        new_day = day
     
     fig.tight_layout()
-#plot_channel(df,diameter_list=[df.columns[6],df.columns[7],df.columns[8]],choose_GR=None,draw_range_edges=False) #DOESNT WORK WITH ONLY ONE GRAPH!!
-
+plot_channel(df,diameter_list=[df.columns[10]],choose_GR=None,draw_range_edges=True,choose_range_i=25)
 plt.show()
 
 ####################################################
