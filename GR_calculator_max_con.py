@@ -17,6 +17,7 @@ from itertools import cycle
 import warnings
 from scipy.optimize import OptimizeWarning
 import time
+from sys import exit
 
 #supressing warnings for curve_fit to avoid crowding of terminal!!
 warnings.simplefilter("ignore",OptimizeWarning) 
@@ -29,6 +30,11 @@ This code assumes dmps data.
 - 1st row (skipping first two 0 values):                diameters in meters, ~3nm-1000nm
 - 3rd column onwards till the end (under diameters):    concentrations, dN/dlog(dp)
 '''
+
+choose_range = None #by index!, check Gr_final.csv for range indices
+draw_rectangles = False #True to draw ranges around mode fitting GRs
+init_plot_channel = True #True to plot channels
+channel_indices = [16] #Indices of diameter channels, 1=small
 
 ################# DATA FORMATTING #################
 folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
@@ -232,7 +238,7 @@ def find_modes(dataframe,df_deriv,threshold_deriv: float):
                 
                 #find end time after local maximum concentration 
                 subset_end = dataframe.index[-1]
-                df_subset = dataframe.loc[start_time:subset_end,diam] #subset from mode start to (mode start + 140mins) unless mode start is near the end of a range
+                df_subset = dataframe.loc[start_time:subset_end,diam]
                 
                 #find local concentration maxima
                 df_subset_left = df_subset.shift(-1)
@@ -586,7 +592,7 @@ def init_ranges(choose_range_i):
         df_ranges = [df_ranges[choose_range_i]]
         growth_rates = [growth_rates[choose_range_i]]
         print("**************************")
-        print("Mode fitting growth rates:",growth_rates)
+        print("Chosen mode fitting growth rate(s):",growth_rates)
 
     start_time = time.time()
     for i,(df_range,growth_rate) in enumerate(zip(df_ranges,growth_rates)): #go through every range around GRs
@@ -594,6 +600,9 @@ def init_ranges(choose_range_i):
         df_deriv = cal_derivative(df_range) 
         df_modes, threshold_deriv = find_modes(df_range,df_deriv,threshold_deriv=0.09) #threshold!!
         
+        if df_modes.isnull().values.all() and choose_range_i is not None:
+            exit("No horizonal modes in this range! Stopping execution.")
+            
         mc_x, mc_y, mc_z, mc_params, dfs_start, dfs_end = maximum_concentration(df_modes)
         at_x, at_y, at_z, at_params = appearance_time(df_modes)
         
@@ -624,7 +633,7 @@ def init_ranges(choose_range_i):
     
     return maxcon_xyz, appear_xyz, df_ranges, mc_fitting_params, at_fitting_params, GRs_mc, GRs_at, dfs_mode_start, dfs_mode_end, threshold_deriv
 
-xyz_maxcon, xyz_appear, df_ranges, *others = init_ranges(choose_range_i=None)
+xyz_maxcon, xyz_appear, df_ranges, *others = init_ranges(choose_range_i=choose_range)
 
 def filter_duplicates(xyz,mtd):
     '''
@@ -1040,9 +1049,9 @@ def plot_PSD(dataframe,draw_rectangles=False):
     ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
     
     print("Plotting done! (4/4) "+"(%s seconds)" % (time.time() - st))
-plot_PSD(df,draw_rectangles=False)
+plot_PSD(df,draw_rectangles=draw_rectangles)
 
-def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges,choose_range_i):
+def plot_channel(dataframe,diameter_list_i,choose_GR,draw_range_edges,choose_range_i):
     '''
     Plots chosen diameter channels over UTC time, with thresholds and gaussian fit.
     ax[0,0] = whole channel over time, with ranges      ax[0,1] = derivative of concentrations
@@ -1098,6 +1107,8 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges,choose_range
     appearances = []            #[(diameter, time (UTC), concentration), ...] 
 
     '''3 find data in datasets with chosen diameters'''
+    diameter_list = [df.columns[i] for i in diameter_list_i]
+    
     for diam in diameter_list:
         #MAXIMUM CONCENTRATION & TIME
         indices = [i for i, a in enumerate(xyz_maxcon[1]) if a == diam] #indices of datapoints with wanted diameter
@@ -1329,12 +1340,10 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges,choose_range
     ax1[len(diameter_list)-1,0].set_xlabel("time (h)", fontsize=8, fontweight="bold")
     ax1[len(diameter_list)-1,1].set_xlabel("time (h)", fontsize=8, fontweight="bold")
     
-    
     #common legends
     #unzip the valid entries into separate lists for the legend
     if len(lines_and_labels) <= 2:
         return print("This diameter channel(s) has no fits!\n**************************")
-
 
     #filter duplicates
     lines_and_labels = {entry[1]: entry for entry in lines_and_labels}
@@ -1357,7 +1366,6 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges,choose_range
     legend_1.remove() #to have the legend on top of graph lines
     legend_11 = ax2.add_artist(legend_1)
     
-    
     #set black edges to star markers in the legend
     #indices of right legend handles
     white_star11_i = [i for i,line_label in enumerate(lines_and_labels1) if line_label[1] == "maximum concentration"]
@@ -1376,7 +1384,7 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges,choose_range
             star[0].set_markeredgewidth(0.4)
             star[0].set_markeredgecolor("black")
 
-    
+
     #plot line when day changes
     new_day = None
     for i in dataframe.index:
@@ -1389,9 +1397,10 @@ def plot_channel(dataframe,diameter_list,choose_GR,draw_range_edges,choose_range
         new_day = day
     
     fig.tight_layout()
-    
     print("Drawing diameter channel(s):",diameter_list)
-plot_channel(df,diameter_list=[df.columns[14],df.columns[15]],choose_GR=None,draw_range_edges=True,choose_range_i=None)
+
+if init_plot_channel:
+    plot_channel(df,diameter_list_i=channel_indices,choose_GR=None,draw_range_edges=True,choose_range_i=choose_range)
 plt.show()
 
 ####################################################
