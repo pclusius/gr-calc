@@ -1,27 +1,26 @@
-from GR_calculator_unfer_v2_modified import df_GR_final, file_names, ax
+from GR_calculator_unfer_v2_modified import file_names, ax
 import numpy as np
 import pandas as pd
 from datetime import datetime
 from datetime import timedelta
 from scipy.optimize import curve_fit
-import matplotlib
+from matplotlib import use
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-matplotlib.use("Qt5Agg") #backend changes the plotting style
 import matplotlib.dates as mdates
 from operator import itemgetter
 from collections import defaultdict
 import statsmodels.api as sm
 from sklearn import linear_model
-from itertools import cycle
-import warnings
+from warnings import simplefilter
 from scipy.optimize import OptimizeWarning
-import time
-from sys import exit
+from time import time
 
 #supressing warnings for curve_fit to avoid crowding of terminal!!
-warnings.simplefilter("ignore",OptimizeWarning) 
-warnings.simplefilter("ignore",RuntimeWarning)
+simplefilter("ignore",OptimizeWarning) 
+simplefilter("ignore",RuntimeWarning)
+
+#backend changes the interface of plotting
+use("Qt5Agg") 
 
 '''
 This code assumes dmps data.
@@ -32,7 +31,16 @@ This code assumes dmps data.
 '''
 
 init_plot_channel = True #True to plot channels
-channel_indices = [11] #Indices of diameter channels, 1=small
+channel_indices = [9] #Indices of diameter channels, 1=small
+
+## parameters ##
+
+#find_modes
+maximum_time_difference = 2.5 #hours (between two peaks)
+minimum_conc_difference = 700 #cm^(-3) (between starting conc and peak conc)
+derivative_threshold = 330 #cm^(-3)/h (starting points of horizontal modes)
+
+#find_dots
 
 ################# DATA FORMATTING #################
 folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
@@ -169,6 +177,7 @@ def cal_derivative(dataframe):
     Calculates 1st derivatives between neighbouring datapoints. 
     Takes in dataframe and wanted range of time in days (in case of smaller dataframes).
     Returns dataframe with derivatives.
+    [ d( dN/dlog(Dp) )/dt ] = cm⁻³/h
     '''
     df_derivatives = pd.DataFrame(np.nan, index=dataframe.index[1:], columns=dataframe.columns) 
     
@@ -177,10 +186,10 @@ def cal_derivative(dataframe):
     
     for i in dataframe.columns: 
         N = dataframe[i] #concentration
-        time = time_days * 24 * 60 * 60 #change days to seconds
+        time = time_days * 24 #change days to hours
         dNdt = np.diff(N)/np.diff(time) #derivative
         df_derivatives.loc[:, i] = dNdt #add calculated derivatives to dataframe
-    return  df_derivatives
+    return df_derivatives
 
 #define mathematical functions for fitting
 def gaussian(x,a,x0,sigma): 
@@ -192,134 +201,133 @@ def linear(x,k,b):
 
 #################### METHODS #######################
 
-def find_modes(dataframe,df_deriv,threshold_deriv: float):
+def find_modes(dataframe,df_deriv,mtd,mcd,threshold_deriv):
     '''
     Finds modes with derivative threshold.
     Takes a dataframe with concentrations and time (UTC), 
     dataframe with time derivatives of the concentrations
     and the wanted derivative threshold.
     Returns dataframe with found modes.
+    mtd = maximum time difference between peaks to be considered the same horizontal "mode"
+    mcd = minimum concentration difference between starting concentration and peak concentration
     '''
     #initialize variables
     #df_modes = pd.DataFrame(np.nan, index=dataframe.index, columns=dataframe.columns) 
     df_modes = pd.DataFrame()
-    start_time = None 
-    end_time = None
 
     #define a threshold that determines what is a high concentration
     threshold = df_deriv > threshold_deriv #checks which values surpass the threshold
-    # #if range is not long enough to cover the whole horizontal more, dont 
-    # for column in threshold:
-    #     if threshold[column][:2].all():
-    #         threshold.loc[:,column] = False
 
     #threshold.iloc[0] = False
     start_points = threshold & (~threshold.shift(1,fill_value=False)) #find start points (type: df)
 
     #shift start points one timestamp earlier
     start_points = start_points.shift(-1, fill_value=False)
+    
+    #find local concentration maxima
+    df_left = dataframe.shift(-1)
+    df_right = dataframe.shift(1)
+    df_maxima = (df_left < dataframe) & (dataframe > df_right)
+
+    max_time_diff = timedelta(hours=mtd) #max time difference between peaks to be concidered the same peak
 
     #iterate over diameter channels
     for diam in df_deriv.columns:
-        #iterate over timestamps for each diameter channel
-        for timestamp in df_deriv.index: 
-            #starting point found for a horizontal "mode"
-            if start_points.loc[timestamp,diam] == True: 
-                start_time = timestamp
-                
-                #if there is already a defined horizontal "mode" at start time, avoid overlapping
-                # if not np.isnan(df_modes.loc[start_time,diam]):
-                #     continue
-                
-                #find end time after local maximum concentration 
-                subset_end = dataframe.index[-1]
-                df_subset = dataframe.loc[start_time:subset_end,diam]
-                
-                #find local concentration maxima
-                df_subset_left = df_subset.shift(-1)
-                df_subset_right = df_subset.shift(1)
-                df_subset_maxima = (df_subset_left < df_subset) & (df_subset > df_subset_right)
-
-                max_time_diff = timedelta(minutes=150) #max time difference between peaks to be concidered the same peak
-                
-                #make df with maxima
-                df_only_maxima = df_subset_maxima[df_subset_maxima.values]
-                
-                #check if peaks are nearby and choose higher one
-                for i in range(len(df_only_maxima)):
-                    try:
-                        max_time1 = df_only_maxima.index[i]
-                        max_time2 = df_only_maxima.index[i+1]
-                        max_conc1 = df_subset.loc[max_time1]
-                        max_conc2 = df_subset.loc[max_time2]
-                        
-                        diff_mins = max_time2-max_time1
-                        
-                        if diff_mins <= max_time_diff and max_conc1 > max_conc2:
-                            df_subset_maxima.loc[max_time2] = False
-                            #df_only_maxima.values[i+1] = False
-                        elif diff_mins <= max_time_diff and max_conc1 < max_conc2:
-                            df_subset_maxima.loc[max_time1] = False
-                            #df_only_maxima.values[i] = False
-                    except IndexError:
-                        break
-                          
-                #if no True values left dont bother finding horizontal mode
-                if not df_subset_maxima.any():
-                    break
-
-                #choose closest maximum after start time
-                for i in range(len(df_subset_maxima.values)):
-                    if df_subset_maxima.index[i] > start_time and df_subset_maxima.values[i] == True:
-                        closest_maximum = df_subset.values[i]
-                        break
-                
-                start_conc = dataframe.loc[timestamp,diam]
-                end_conc = ((closest_maximum + start_conc ) / 2) * 0.8  #(N_max + N_start)/2 * 0.8
-                max_conc_time = df_subset.index[df_subset == closest_maximum].tolist()[0] #rough estimate of maximum concentration time 
-                max_conc_time_i = dataframe.index.get_loc(max_conc_time) #index of max_conc_time
-                
-                #new ending limit to find end concentration time, same as max time difference for peaks
-                try:
-                    #new_subset_end = dataframe.index[max_conc_time_i + (max_conc_time_i - dataframe.index.get_loc(start_time))] 
-                    new_subset_end = dataframe.index[max_conc_time_i + 5] 
-                except IndexError:
-                    new_subset_end = dataframe.index[-1] #limits to range aroung GRs
-                
-                end_conc_i = closest(dataframe.loc[max_conc_time:new_subset_end,diam],end_conc) #index of end point after peak
-                end_time = dataframe.index[end_conc_i+max_conc_time_i] #end time found!
-                
-                #attempt to filter peaks that are not at least 1000 cm⁻³ higher than their min value
-                min_conc = min(dataframe.loc[max_conc_time:end_time,diam])
-                if closest_maximum - min_conc < 700:
+        #subset of start points
+        start_points_only = start_points[diam][start_points[diam].values]
+        start_times = start_points_only.index
+        end_time = None
+        
+        #loop through start times
+        for start_time in start_times:
+  
+            try:
+                if start_time < end_time:
                     continue
-
-                #skip modes with same start or end time
-                if not start_time == end_time:
-                    #when a start/end time has been found fill df with concentrations between start and end time
-                    subset = dataframe[diam].loc[start_time:end_time]
-                    
-                    #dont save modes that consist of less than 4 points
-                    if len(subset.values) > 3:
-                        #df_modes.loc[subset.index,diam] = subset #fill dataframe
-                        new_row = pd.DataFrame({"start_time": [start_time], "end_time": [end_time], "diameter": [diam]})
-                        
-                        df_modes = pd.concat([df_modes,new_row],ignore_index=True)
-                        
-                
-                # if diam == 35.640105:
-                #     breakpoint()
-                    
-                #restart initial values
-                start_time = None 
-                end_time = None 
-                
-            #keep iterating over timestamps for starting points of horizontal "modes"
-            else:
-                continue
+            except TypeError:
+                pass
             
+            
+            #find end time after local maximum concentration 
+            #subset_end = dataframe.index[-1]  
+            try:
+                subset_end = start_time + timedelta(hours=24) #one day ahead
+            except IndexError:
+                subset_end = dataframe.index[-1]  
+                
+            df_subset = dataframe.loc[start_time:subset_end,diam]
+            df_subset_maxima = df_maxima.loc[start_time:subset_end,diam]
+            
+            #make df with maxima
+            df_subset_only_maxima = df_subset_maxima[df_subset_maxima.values]
+            
+            #check if peaks are nearby and choose higher one
+            for i in range(len(df_subset_only_maxima)):
+                try:
+                    max_time1 = df_subset_only_maxima.index[i]
+                    max_time2 = df_subset_only_maxima.index[i+1]
+                    max_conc1 = dataframe.loc[max_time1,diam]
+                    max_conc2 = dataframe.loc[max_time2,diam]
+                    
+                    diff_mins = max_time2-max_time1
+                    
+                    if diff_mins <= max_time_diff and max_conc1 > max_conc2:
+                        df_maxima.loc[max_time2,diam] = False
+                        df_subset_maxima.loc[max_time2] = False
+                    elif diff_mins <= max_time_diff and max_conc1 < max_conc2:
+                        df_maxima.loc[max_time1,diam] = False
+                        df_subset_maxima.loc[max_time1] = False
+                except IndexError:
+                    break
+            
+            #if no True values left dont bother finding horizontal mode
+            if not df_subset_maxima.any():
+                continue
+
+            #choose closest maximum after start time
+            for i in range(len(df_subset_maxima.values)):
+                if df_subset_maxima.index[i] > start_time and df_subset_maxima.values[i] == True:
+                    closest_maximum = df_subset.values[i]
+                    break
+            
+            start_conc = dataframe.loc[start_time,diam]
+            end_conc = ((closest_maximum + start_conc ) / 2) * 0.8  #(N_max + N_start)/2 * 0.8
+            max_conc_time = df_subset.index[df_subset == closest_maximum].tolist()[0] #rough estimate of maximum concentration time 
+            max_conc_time_i = dataframe.index.get_loc(max_conc_time) #index of max_conc_time
+            
+            #new ending limit to find end concentration time, same as max time difference for peaks
+            try:
+                #new_subset_end = dataframe.index[max_conc_time_i + (max_conc_time_i - dataframe.index.get_loc(start_time))] 
+                new_subset_end = dataframe.index[max_conc_time_i + 5] 
+            except IndexError:
+                new_subset_end = dataframe.index[-1] #limits to range aroung GRs
+            
+            end_conc_i = closest(dataframe.loc[max_conc_time:new_subset_end,diam],end_conc) #index of end point after peak
+            end_time = dataframe.index[end_conc_i+max_conc_time_i] #end time found!
+            
+            #attempt to filter peaks that are not at least 1000 cm⁻³ higher than their min value
+            min_conc = min(dataframe.loc[start_time:max_conc_time,diam])
+            if closest_maximum - min_conc < mcd:
+                continue
+
+            #skip modes with same start or end time
+            if not start_time == end_time:
+                #when a start/end time has been found fill df with concentrations between start and end time
+                subset = dataframe[diam].loc[start_time:end_time]
+                
+                average_conc = sum(subset.values) / len(subset)
+                
+                #dont save modes that consist of less than 4 points
+                if len(subset.values) > 3 and average_conc > start_conc:
+                    #df_modes.loc[subset.index,diam] = subset #fill dataframe
+                    new_row = pd.DataFrame({"start_time": [start_time], "end_time": [end_time], "diameter": [diam]})
+                    
+                    df_modes = pd.concat([df_modes,new_row],ignore_index=True)
+                    
+                    # if diam == 7.5626058:
+                    #     breakpoint()
+       
     #df_modes.to_csv('./find_modes.csv', sep=',', header=True, index=True, na_rep='nan')
-    print(df_modes)
     return df_modes, threshold_deriv
 def maximum_concentration(df_modes): 
     '''
@@ -395,7 +403,7 @@ def maximum_concentration(df_modes):
     
     return max_conc_time, max_conc_diameter, max_conc, fitting_params, start_times, end_times, mode_diams
 def appearance_time(df_modes):
-    '''max_conc_time
+    '''
     Calculates the appearance times.
     Takes in dataframe from wanted area in the PSD.
     Returns:
@@ -486,7 +494,7 @@ def appearance_time(df_modes):
     appear_time = np.array(appear_time)
 
     return appear_time, appear_diameter, mid_conc, fitting_params
-def init_methods(dataframe):
+def init_methods(dataframe,mtd,mcd,threshold_deriv):
     '''
     Goes through all ranges and calculates the points for maximum concentration
     and appearance time methods along with other useful information.
@@ -495,22 +503,22 @@ def init_methods(dataframe):
     maxcon_xyz = [] #maximum concentration
     appear_xyz = [] #appearance time
 
-    start_time = time.time()
+    start_time = time()
     #calculate derivative and define modes
     df_deriv = cal_derivative(dataframe) 
-    df_modes, threshold_deriv = find_modes(dataframe,df_deriv,threshold_deriv=0.09) #threshold!!
-        
+    df_modes, threshold_deriv = find_modes(dataframe,df_deriv,mtd,mcd,threshold_deriv) #threshold!!
+    
+    #methods
     mc_x, mc_y, mc_z, mc_params, mode_starts, mode_ends, mode_diams = maximum_concentration(df_modes)
     at_x, at_y, at_z, at_params = appearance_time(df_modes)
-    
-    print("Fitting done! (2/4) "+"(%s seconds)" % (time.time() - start_time))
+    print("Fitting done! (2/4) "+"(%s seconds)" % (time() - start_time))
     
     #combine to same lists
     maxcon_xyz = [mc_x,mc_y,mc_z]
     appear_xyz = [at_x,at_y,at_z]
     
     return maxcon_xyz, appear_xyz, mc_params, at_params, mode_starts, mode_ends, mode_diams, threshold_deriv
-xyz_maxcon, xyz_appear, *others = init_methods(df)
+xyz_maxcon, xyz_appear, *others = init_methods(df,mtd=maximum_time_difference,mcd=minimum_conc_difference,threshold_deriv=derivative_threshold)
 
 ################## GROWTH RATES ####################
 
@@ -698,7 +706,7 @@ def filter_dots(datapoints):
 
     return filtered_datapoints  
 def init_find():
-    start_time = time.time()
+    start_time = time()
     #find consequtive datapoints
     mc_data = find_dots(times= xyz_maxcon[0],diams= xyz_maxcon[1]) #maximum concentration
     at_data = find_dots(times= xyz_appear[0],diams= xyz_appear[1]) #appearance time
@@ -712,7 +720,7 @@ def init_find():
     diam_mc = [[seg[1] for seg in mc_segment] for mc_segment in mc_filtered]
     time_at = [[seg[0] for seg in at_segment] for at_segment in at_filtered]
     diam_at = [[seg[1] for seg in at_segment] for at_segment in at_filtered]
-    print("Dots found! (3/4) "+"(%s seconds)" % (time.time() - start_time))
+    print("Dots found! (3/4) "+"(%s seconds)" % (time() - start_time))
     
     return time_mc, diam_mc, time_at, diam_at
     
@@ -790,7 +798,7 @@ def plot_PSD(dataframe):
     appearance time methods.
     Additionally does adjustments to PSD.
     '''
-    st = time.time()
+    st = time()
     #plot line when day changes
     new_day = None
     for i in dataframe.index:
@@ -825,10 +833,10 @@ def plot_PSD(dataframe):
     plt.xlabel("time",fontsize=14) #add y-axis label
     ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
     
-    print("Plotting done! (4/4) "+"(%s seconds)" % (time.time() - st))
+    print("Plotting done! (4/4) "+"(%s seconds)" % (time() - st))
 plot_PSD(df)
 
-def plot_channel(dataframe,diameter_list_i):
+def plot_channel(dataframe,diameter_list_i,mtd,mcd,threshold_deriv):
     '''
     Plots chosen diameter channels over UTC time, with thresholds and gaussian fit.
     ax[0,0] = whole channel over time, with ranges      ax[0,1] = derivative of concentrations
@@ -839,7 +847,7 @@ def plot_channel(dataframe,diameter_list_i):
     
     '''1 assemble all datasets'''
     xyz_maxcon, xyz_appear, fitting_parameters_gaus, fitting_parameters_logi, \
-        mode_starts, mode_ends, mode_diams, threshold_deriv = init_methods(dataframe)
+        mode_starts, mode_ends, mode_diams, threshold_deriv = init_methods(dataframe,mtd,mcd,threshold_deriv)
 
     '''2 define lists and their shapes'''
     mode_edges = []             #[(diameter,start_time (UTC),end_time (UTC)), ...]
@@ -991,7 +999,7 @@ def plot_channel(dataframe,diameter_list_i):
     for row_num, y in enumerate(y_list):
         #left axis
         color1 = "royalblue"
-        ax1[row_num,1].set_ylabel("d²N/dlogDpdt (cm⁻³s⁻¹)", color=color1, fontsize=8)
+        ax1[row_num,1].set_ylabel("d²N/dlogDpdt (cm⁻³/h)", color=color1, fontsize=8)
         ax1[row_num,1].plot(x, y, color=color1, lw=1)
         ax1[row_num,1].scatter(x, y, s=2, c=color1)
         
@@ -1000,7 +1008,7 @@ def plot_channel(dataframe,diameter_list_i):
             item.set_fontweight("bold")
         ax1[row_num,1].tick_params(axis='y', labelcolor=color1)
         line6 = ax1[row_num,1].axhline(y=threshold_deriv, color="royalblue", linestyle='--', lw=1)
-        lines_and_labels.add((line6,f"threshold = {str(threshold_deriv)}"))
+        lines_and_labels.add((line6,f"threshold = {str(threshold_deriv)} cm⁻³/h"))
         
         #start and end points of modes
         found_ranges = []
@@ -1028,7 +1036,7 @@ def plot_channel(dataframe,diameter_list_i):
 
         
         ax1[row_num,1].set_xlim(dataframe.index[1],dataframe.index[-1])
-        ax1[row_num,1].set_ylim(-0.2,0.2)
+        ax1[row_num,1].set_ylim(-50,threshold_deriv*1.8)
         ax1[row_num,1].set_facecolor("lightgray")
         #ax1[row_num,1].xaxis.set_tick_params(rotation=30) #rotating x-axis labels
         ax1[row_num,1].xaxis.set_major_formatter(mdates.DateFormatter("%H"))
@@ -1073,7 +1081,7 @@ def plot_channel(dataframe,diameter_list_i):
     legend_1 = ax1[0, 0].legend(valid_lines, valid_labels, fancybox=False, framealpha=0.9, fontsize=4, loc="upper right")
     
     #right plots
-    lines_and_labels2 = [elem for elem in lines_and_labels if elem[1] in ["maximum concentration","appearance time","mode edges",f"threshold = {str(threshold_deriv)}"]]
+    lines_and_labels2 = [elem for elem in lines_and_labels if elem[1] in ["maximum concentration","appearance time","mode edges",f"threshold = {str(threshold_deriv)} cm⁻³/h"]]
         
     valid_lines, valid_labels = zip(*lines_and_labels2)
     legend_2 = ax1[0, 1].legend(valid_lines, valid_labels, fancybox=False, framealpha=0.9, fontsize=4, loc="upper right")
@@ -1114,7 +1122,7 @@ def plot_channel(dataframe,diameter_list_i):
     print("Drawing diameter channel(s):",diameter_list)
 
 if init_plot_channel:
-    plot_channel(df,diameter_list_i=channel_indices)
-plt.show()
+    plot_channel(df,diameter_list_i=channel_indices,mtd=maximum_time_difference,mcd=minimum_conc_difference,threshold_deriv=derivative_threshold)
 
+plt.show()
 ####################################################
