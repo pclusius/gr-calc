@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue May  7 19:54:10 2024
+Modified on ???
 
 @author: unfer
+@modified: bouhlal
 """
 
 import numpy as np
@@ -21,24 +23,25 @@ import json ###
 from operator import itemgetter ###
 from collections import defaultdict ###
 import time ###
+import matplotlib.dates as mdates ###
 
-#parameters
+## parameters ##
 show_mape = False #show mape values of lines instead of growth rates, unit %
+mape_threshold_factor = 15 #a*x^(-1) (constant a that determines mean average error thresholds for different line lengths)
+gr_error_threshold = 1.5 #nm/h (error of growth rates when adding new points to gr lines)
 
 ###################################################################
 #paths = "./dmps Nesrine/dm160401.sum" ###path to data file
 folder = "./dmps Nesrine/" #folder with data files
 #dados1= pd.read_csv(paths,sep='\s+',engine='python') ###steps to '\s+'
 #df1 = pd.DataFrame(dados1)
-#dm160612.sum
 
 #file_names = ["dm160612.sum"]
 file_names = ["dm160410.sum","dm160411.sum","dm160412.sum"]
-#file_names = ["dm160410.sum","dm160411.sum"]
 #file_names = ["dm160426.sum","dm160427.sum","dm160428.sum"]
+
 #modefit_names = ["output_modefit_2016_06_12.csv"]
 modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv","output_modefit_2016_04_12.csv"]
-#modefit_names = ["output_modefit_2016_04_10.csv","output_modefit_2016_04_11.csv"]
 #modefit_names = ["output_modefit_2016_04_26.csv","output_modefit_2016_04_27.csv","output_modefit_2016_04_28.csv"]
 
 #set epoch
@@ -74,13 +77,9 @@ diameters = df1.columns[2:].astype(float)*10**9 ### save diameters as floats bef
 df1.columns = ["time (d)", "total number concentration (N)"] + [f"dN/dlogDp_{i}" for i in range(1,df1.shape[1]-1)] ###rename columns
 time_d = df1.iloc[:,0].astype(float) ###ADDED save time as days before changing them to UTC 
 
-### assuming time is in "days from start of measurement"
-def days_into_UTC():
-    time_steps = df1["time (d)"] - time_d[0]
-    start_date_measurement = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00"
-    start_date = datetime.strptime(start_date_measurement, "%Y-%m-%d %H:%M:%S")
-    df1["time (d)"] = [start_date + timedelta(days=i) for i in time_steps] #converting timesteps to datetime
-days_into_UTC() ###
+#days to UTC times
+df1["time (d)"] = df1["time (d)"] - df1["time (d)"][0] #substract first day ###
+df1["time (d)"] = pd.Series(mdates.num2date(df1["time (d)"])).dt.tz_localize(None) ###
 
 df1.rename(columns={'time (d)': 'Timestamp (UTC)'}, inplace=True) ###CHANGE '# "datetime (UTC)"' -> 'time (d)'
 df1['Timestamp (UTC)']=pd.to_datetime(df1['Timestamp (UTC)'], format="%Y-%m-%d %H:%M:%S")
@@ -135,7 +134,6 @@ def avg_filter(dataframe,resolution):
         for ts in irrelevant_ts:
             dataframe.loc[ts,dp] = np.nan #set nan value for irrelevant datapoints
  
-
     return dataframe
 df1 = avg_filter(df1,resolution=30)
 ###
@@ -176,10 +174,6 @@ df_modefits = df_modefits.drop(['timestamp'], axis=1)
 ##################################################
 
 ###
-#mitä pidempi suora on tai mitä enemmän pisteitä löytyy sitä enemmän vaihtelua mape sallii myöhemmin
-#riippuen datapisteiden määrästä mape muuttuu, mape N:n funktiona, alussa mape isompi, myöhemmin pienempi
-#YHDISTÄ KAIKKI MOODIT ENSIN YHTEEN
-#ETSI AINA AIKASTEPPI KERRALLAAN +-10nm VÄLILLÄ SEURAAVA PISTE, MOODIEN VÄLISSÄ +- VOI OLLA LAAJEMPI (15nm?)
 def timestamp_indexing(timestamps):
     '''
     Creates list of indices corresponding to given timestamp list.
@@ -209,18 +203,17 @@ def cal_mape(x,y,popt):
     absolute_error = np.abs(y - y_predicted)
     mape = np.mean(absolute_error / y) * 100
     return mape
-def cal_mase(x,y,popt):
-    y_predicted = linear(x, *popt)
-    mean_absolute_error = np.mean(np.abs(y - y_predicted))
-    mean_absolute_deviation = np.mean(np.abs(y - np.mean(y)))
-    mase = np.mean(mean_absolute_error/mean_absolute_deviation)
-    return mase   
+def linear(x,k,b):
+    return k*x + b
+###
 
-def combine_segments_ver2(df):
+def combine_segments_ver2(df,a,gr_error_threshold): ###
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
     Returns lists with wanted times and diameters for plotting growth rates.
+    
+    gret = growth rate error threshold for filtering bigger changes in gr when adding new points to lines
     ''' 
     #extract times and diameters from df
     times = df.index
@@ -234,7 +227,7 @@ def combine_segments_ver2(df):
     finalized_lines = []
     df_mapes = pd.DataFrame()
     
-    max_time_diff = 90 #90mins = 1,5h
+    max_time_diff = 90 #90mins = 1,5h between current and nearby point
     
     #iterate through each datapoint to find suitable pairs of mode fitting datapoints
     for i, datapoint in enumerate(data_sorted):
@@ -242,27 +235,26 @@ def combine_segments_ver2(df):
         
         #diam difference in channels changes in a logarithmic scale
         nextnext_diam = df1.columns[closest(df1.columns,diam0)+2] #diameter in the channel one after
-        max_diam_diff = abs(df1.columns[closest(df1.columns,diam0)]-nextnext_diam) #max one diameter channel empty in between
+        max_diam_diff = abs(df1.columns[closest(df1.columns,diam0)]-nextnext_diam) #max two diameter channels empty in between
 
         #iterate through timestamps after current datapoint and look for the nearest datapoint in timestamp
         timesteps = int(max_time_diff / 30)
         
         for ii in range(1,timesteps+1): #one step represents 30mins: [30mins, 90mins]
-            #timestamp for current iteration
             timestamp = time0 + timedelta(minutes=30)*ii
-            #print(i,ii,"time",time0)
+
             #search for datapoints in this timestamp (segment)
             ts_points = [point for point in data_sorted if point[0] == timestamp]  
             if not ts_points: #skip if no datapoints in current timestamp
                 continue
             
-            #closest datapoint
+            #closest datapoint next in list
             nearby_datapoint = tuple(min(ts_points, key=lambda point: abs(point[1] - diam0)))
             diam_diff = abs(nearby_datapoint[1] - diam0)
             
             #check diameter difference
             if diam_diff <= max_diam_diff: 
-                
+                #print("current datapoint",datapoint,"nearby datapoint",nearby_datapoint)
                 #if datapoint is not already in a line
                 if not any(tuple(datapoint) in line for line in unfinished_lines):
                     unfinished_lines.append([tuple(datapoint),nearby_datapoint])
@@ -282,50 +274,74 @@ def combine_segments_ver2(df):
                 #make a linear fit to check mape for line with new datapoint
                 iii, current_line = [(i,line) for i,line in enumerate(unfinished_lines) if nearby_datapoint in line][0]
                 
+                
+                ##check the length of current line##
                 if len(current_line) <= 2: #pointless to analyze mape with less than 3 datapoints
-                    continue #proceed to next line
-                elif len(current_line) >= 3:
+                    break #proceed to next line
+                elif len(current_line) == 3:
                     x = timestamp_indexing([datapoint[0] for datapoint in current_line]) #times
                     y = [datapoint[1] for datapoint in current_line] #diams
                     popt, pcov = curve_fit(linear, x, y)
                     mape = cal_mape(x,y,popt)
-                else:#THIS ISNT BEING USED CURRENTLY
-                    #do fit to previous datapoints and calculate mape with the new datapoint included
-                    x = timestamp_indexing([datapoint[0] for datapoint in current_line[:-1]]) #times (last datapoint excluded)
-                    y = [datapoint[1] for datapoint in current_line[:-1]] #diams (last datapoint excluded)
-                    popt, pcov = curve_fit(linear, x, y)
+                else:
+                    # #calculate mape of last 4 points
+                    # x_last4 = timestamp_indexing([datapoint[0] for datapoint in current_line[-4:]])
+                    # y_last4 = [datapoint[1] for datapoint in current_line[-4:]]
+                    # popt_last4, pcov = curve_fit(linear, x_last4, y_last4)
+                    # mape_last4 = cal_mape(x_last4,y_last4,popt_last4)
 
-                    #print("timestamps:",[datapoint[0] for datapoint in current_line[:-1]],"x:",x,"y:",y)
-                    #add newest datapoint back to x and y
+                    #do fit to previous datapoints and calculate mape with the new datapoint included
+                    x_last_excluded = timestamp_indexing([datapoint[0] for datapoint in current_line[:-1]]) #times
+                    y_last_excluded = [datapoint[1] for datapoint in current_line[:-1]] #diams
+                    popt_last_excluded, pcov = curve_fit(linear, x_last_excluded, y_last_excluded)
+
+                    #calculate mape with all points but popt of line without the last point
                     x = timestamp_indexing([datapoint[0] for datapoint in current_line])
                     y = [datapoint[1] for datapoint in current_line]
-                    mape = cal_mape(x,y,popt) #!!!
+                    mape_last_excluded = cal_mape(x,y,popt_last_excluded)
+                    GR_last_excluded = popt_last_excluded[0] * 2
                     
                     #check mape of the whole line also
                     popt, pcov = curve_fit(linear, x, y)
                     mape = cal_mape(x,y,popt)
-                    
-                    #print("time0_index:",time0_index,"y_fit:","new x:",x,"new y:",y,"mape:",mape)
+                    GR = popt[0] * 2
+            
+                    mape_absolute_error = abs(mape_last_excluded-mape)
+                    gr_abs_error = abs(GR-GR_last_excluded)
+
                 
-                #mape threshold linearly gets stricter until 5 datapoints
-                #with 5 or more points threshold is 3% and with 3 points 5%
-                #mape_threshold = -1*len(line)+8 if len(line) < 5 else 3.2
-                mape_threshold = 15*len(current_line)**(-1) #15*x^(-1)
-                # if mape_threshold > 3:
-                #     mape_threshold = 3
-                    
-                new_row = pd.DataFrame({"length": [len(current_line)], "mape": [mape]})
-                df_mapes = pd.concat([df_mapes,new_row],ignore_index=True)
+                #printing
+                # for time,diam in current_line:
+                #         print("time:",time,"diameter:",diam)
+                            
+                # #print("length of line:",len(current_line))
+                # print(f"mape threshold:",mape_threshold,"mape:",mape)
+                # if len(current_line) > 3:
+                #     print("gr_abs_error:",gr_abs_error)
                 
+                #thresholds    
+                mape_threshold = a*len(current_line)**(-1) #a*x^(-1)
+                gr_error_threshold = gr_error_threshold
+            
+                #check mape and gr error threshold
                 if mape > mape_threshold:
-                    #calculate mape without first datapoint of line to see if mape is smaller
+                    #mape without first datapoint of line
                     x = timestamp_indexing([datapoint[0] for datapoint in current_line[1:]])
                     y = [datapoint[1] for datapoint in current_line[1:]] #diams
-                    
                     popt, pcov = curve_fit(linear, x, y)
-                    mape = cal_mape(x,y,popt)
-                    if mape > mape_threshold: #if mape is still too big
-                        #delete recently added datapoint from unfinished lines
+                    mape_no_first = cal_mape(x,y,popt)
+                    
+                    #without last datapoint
+                    x = timestamp_indexing([datapoint[0] for datapoint in current_line[:-1]])
+                    y = [datapoint[1] for datapoint in current_line[:-1]] #diams
+                    popt, pcov = curve_fit(linear, x, y)
+                    mape_no_last = cal_mape(x,y,popt)
+
+                    print("mape_no_first",mape_no_first,"mape_no_last",mape_no_last)
+                    
+                    #if mape is smaller without the last datapoint remove last datapoint
+                    #if the line is shorter than 4 give another chance for shorter lines to start anew
+                    if mape_no_last <= mape_no_first and len(current_line) > 4:
                         unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
                         
                         #allow lines to start from the same point as others end in
@@ -333,81 +349,92 @@ def combine_segments_ver2(df):
                         finalized_lines.append(current_line[:-1])
                         unfinished_lines.append([tuple(datapoint),nearby_datapoint])
 
-                        x = timestamp_indexing([datapoint[0] for datapoint in current_line[:-1]])
-                        y = [datapoint[1] for datapoint in current_line[:-1]] #diams
-                        popt, pcov = curve_fit(linear, x, y)
-                        mape = cal_mape(x,y,popt) #update mape value 
                     else:
-                        #remove current line from unfinished lines
-                        unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
-                        
-                        #add current line without the first element to finalized lines
-                        finalized_lines.append(current_line[1:])    
+                        #remove first point in current line from unfinished lines
+                        unfinished_lines[iii] = current_line[1:]
                 
-                '''
-                #BASICALLY LIMITS LONGEST LINE TO 8 DATAPOINTS!!!
-                #try splitting line into two parts from the middle to lower mape
-                #does it when all lines haven't been found yet 
-                if len(combined[iii]) >= 8: #at least 8 datapoints needed
+                elif len(current_line) > 4 and gr_abs_error > gr_error_threshold:
+                    #delete line with recently added datapoint from unfinished lines
+                    unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
                     
-                    middle_index = len(combined[iii])//2
-                    line_1st_half = combined[iii][:middle_index]
-                    #uneven numbers include one more element in the 2nd half
-                    line_2nd_half = combined[iii][middle_index:]
+                    #allow lines to start from the same point as others end in
+                    #save current line to another list and add the ending point as the start for a new line
+                    finalized_lines.append(current_line[:-1])
+                    unfinished_lines.append([tuple(datapoint),nearby_datapoint])
                     
-                    #print(combined[iii][0],combined[iii][-1])
-                    #print(line_1st_half[0],line_1st_half[-1])
-                    #print(line_2nd_half[0],line_2nd_half[-1],"\n")
-                    #calculate if mape lowered significantly
-                    x = timestamp_indexing([datapoint[0] for datapoint in line_1st_half])
-                    y = [datapoint[1] for datapoint in line_1st_half] #diams
-                    popt, pcov = curve_fit(linear, x, y)
-                    mape1 = cal_mape(x,y,popt)
-                    
-                    x = timestamp_indexing([datapoint[0] for datapoint in line_2nd_half])
-                    y = [datapoint[1] for datapoint in line_2nd_half]
-                    popt, pcov = curve_fit(linear, x, y)
-                    mape2 = cal_mape(x,y,popt)
-                    
-                    #print([datapoint[0] for datapoint in line_1st_half])
-                    #print(x,y)
-                    #relative change in mape
-                    rel_diff1 = ((mape1-mape)/mape) * 100
-                    rel_diff2 = ((mape2-mape)/mape) * 100
-                    
-                    #print(mape1,mape2, mape)
-                    
-                    #print("relative differences:",rel_diff1,rel_diff2)
-                    
-                    #if mape improves (decreases) by 40% split line in two
-                    if rel_diff1 <= -40 or rel_diff2 <= -40:
-                        #remove the second half of current line and add it as its own line
-                        combined[iii] = line_1st_half
-                        combined.append(line_2nd_half)
-                        
-                        #remove from data_pairs also
-                        connecting_pair = [line_1st_half[-1],line_2nd_half[0]]
-                        data_pairs = [pair for pair in data_pairs if not np.array_equal(connecting_pair, pair)]
-                    ''' 
+                #give another chance for short lines
+                elif len(current_line) == 4 and gr_abs_error > gr_error_threshold:
+                    #remove first point in current line from unfinished lines
+                    unfinished_lines[iii] = current_line[1:]
+                print()
                 break
             else: #keep looking for next datapoint until end of points if the next one isnt suitable
                 continue
-    
-    df_mapes.to_csv('./df_mapes_modefitting.csv', sep=',', header=True, index=True, na_rep='nan')
     
     #add rest of the lines to finalized lines and by timestamp
     finalized_lines.extend(unfinished_lines)
     finalized_lines = [sorted(line, key=lambda x: x[0]) for line in finalized_lines] 
     
+    #try splitting line into two parts from the middle to lower mape
+    for i, finalized_line in enumerate(finalized_lines):
+        if len(finalized_line) >= 7: #at least 7 datapoints needed  
+            middle_index = len(finalized_line)//2
+            line_1st_half = finalized_line[:middle_index+1] #overlap +1
+            line_2nd_half = finalized_line[middle_index:]
+            
+            #calculate if mape lowered in both halves
+            #whole line
+            x = timestamp_indexing([datapoint[0] for datapoint in finalized_line])
+            y = [datapoint[1] for datapoint in finalized_line] #diams
+            popt, pcov = curve_fit(linear, x, y)
+            mape = cal_mape(x,y,popt)
+            
+            #1st half
+            x = timestamp_indexing([datapoint[0] for datapoint in line_1st_half])
+            y = [datapoint[1] for datapoint in line_1st_half] #diams
+            popt, pcov = curve_fit(linear, x, y)
+            mape1 = cal_mape(x,y,popt)
+            
+            #2nd half
+            x = timestamp_indexing([datapoint[0] for datapoint in line_2nd_half])
+            y = [datapoint[1] for datapoint in line_2nd_half]
+            popt, pcov = curve_fit(linear, x, y)
+            mape2 = cal_mape(x,y,popt)
+            
+            if mape1 < mape and mape2 <= mape:
+                #remove the second half of current line and add it as its own line to finalized lines
+                finalized_lines[i] = line_1st_half
+                finalized_lines.append(line_2nd_half)  
+            
+            # #relative change in mape
+            # rel_diff1 = ((mape1-mape)/mape) * 100
+            # rel_diff2 = ((mape2-mape)/mape) * 100
+            
+            # print("rel_diff1",rel_diff1,"rel_diff2",rel_diff2)
+            # print("mape",mape,"mape1",mape1,"mape2",mape2)
+            # print()
+            
+            # #if mape improves (decreases) by 40% split line in two
+            # if rel_diff1 <= -40 or rel_diff2 <= -40:
+            #     #remove the second half of current line and add it as its own line to finalized lines
+            #     finalized_lines[i] = line_1st_half
+            #     finalized_lines.append(line_2nd_half)  
+    
+    #calculate mapes to show on plot
+    for finalized_line in finalized_lines:
+        x = timestamp_indexing([datapoint[0] for datapoint in finalized_line])
+        y = [datapoint[1] for datapoint in finalized_line] #diams
+        popt, pcov = curve_fit(linear, x, y)
+        mape = cal_mape(x,y,popt)
+        
+        new_row = pd.DataFrame({"length": [len(x)], "mape": [mape]})
+        df_mapes = pd.concat([df_mapes,new_row],ignore_index=True)
+        
+    df_mapes.to_csv('./df_mapes_modefitting.csv', sep=',', header=True, index=True, na_rep='nan')
+    
     return finalized_lines
 
-###################################################
-
-def linear(x,k,b): ###
-    return k*x + b
-
-###
-def filter_segments_ver2(combined):
+def filter_segments_ver2(combined): ###
     '''
     Filter datapoints of lines that are too short or
     with too big of an error.
@@ -439,34 +466,21 @@ def filter_segments_ver2(combined):
                 print("Linear fit diverges.")
     
     return filtered_lines
-###
 
-########################
-
-###
-def process_data_ver2(df):
+def process_data_ver2(df,a,gr_error_threshold):
     start_time = time.time()
-    comb_segs = combine_segments_ver2(df)
+    comb_segs = combine_segments_ver2(df,a=a,gr_error_threshold=gr_error_threshold)
     print("--- %s seconds ---" % (time.time() - start_time))
     print('Combined segments done! (1/2)')
     filter_segs = filter_segments_ver2(comb_segs)
     print('Filtering done! (2/2)')    
  
     return filter_segs
-###
-
-
-###############################################################################
-
-
-###
 print('\n'+'*********** Processing mode fitting data'+'\n')
-filter_segs = process_data_ver2(df_modefits) #data from Janne's code
+filter_segs = process_data_ver2(df_modefits,mape_threshold_factor,gr_error_threshold) #data from Janne's code
 ###
 
-
 ###############################################################################
-
 
 def plot2_ver2(filter_segs,show_mape):
     fig, ax = plt.subplots(figsize=(14, 5), dpi=200) ### figsize=(12, 3), dpi=300 -> figsize=(12, 5), dpi=200
@@ -483,7 +497,7 @@ def plot2_ver2(filter_segs,show_mape):
     #modefit points (as black stars)
     time = df_modefits.index
     diam = df_modefits['peak_diameter']
-    plt.plot(time,diam,'*', alpha=0.5, color='black', markersize=5, label='mode fitting')
+    plt.plot(time,diam,'.', alpha=0.8, color='black', mec='black', mew=0.4, ms=6, label='mode fitting')
     
     #growth rates
     '''
@@ -501,7 +515,7 @@ def plot2_ver2(filter_segs,show_mape):
         params, pcov = curve_fit(linear, x, diam[i])
         gr = params[0]*2 #unit to nm/h from nm/0.5h (due to how x is defined)
         diam_fit = params[0]*x + params[1]
-        plt.plot(time[i],diam_fit,lw=3) #line
+        plt.plot(time[i],diam_fit,lw=2) #line
         
         midpoint_idx = len(time[i]) // 2 #growth rate value
         midpoint_time = time[i][midpoint_idx]
@@ -526,6 +540,4 @@ def plot2_ver2(filter_segs,show_mape):
 #ax = plot2(df_GR_final) ### 
 ax, df_GR_final = plot2_ver2(filter_segs,show_mape=show_mape) ### 
 df_GR_final.to_csv('./Gr_final.csv', sep=',', header=True, index=True, na_rep='nan')
-
-
 
