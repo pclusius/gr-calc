@@ -15,8 +15,9 @@ from warnings import simplefilter
 from scipy.optimize import OptimizeWarning
 from time import time
 import aerosol.functions as af #janne's aerosol functions
-import peak_fitting as pf
+import history.peak_fitting as pf
 import json 
+import xarray as xr
 
 #supressing warnings for curve_fit to avoid crowding of terminal!!
 simplefilter("ignore",OptimizeWarning) 
@@ -41,13 +42,13 @@ derivative_threshold = 200 #cm^(-3)/h (starting points of horizontal peak areas,
 
 #find_dots
 show_mae = False #show mae values of lines instead of growth rates, unit hours
-maximum_time_difference_dots = 2 #hours (between current and nearby point)
+maximum_time_difference_dots = 2.5 #hours (between current and nearby point)
 mae_threshold_factor = 2 #a*x^(-1) (constant a that determines mean average error thresholds for different line lengths)
-gr_error_threshold = 3 #nm/h (error of growth rates when adding new points to gr lines)
+gr_precentage_error_threshold = 50 #% (precentage error of growth rates when adding new points to gr lines)
 
 #channel plotting
-init_plot_channel = True #True to plot channels
-channel_indices = [12] #Indices of diameter channels, 1=small
+init_plot_channel = False #True to plot channels
+channel_indices = [5] #Indices of diameter channels, 1=small
 show_start_times_and_maxima = True #True to show all possible start times of peak areas (black arrow) and maximas associated
 
 ################# DATA FORMATTING #################
@@ -359,7 +360,7 @@ def find_modes(dataframe,df_deriv,mpd,threshold_deriv):
             
             #define concentration threshold for ending point
             min_conc = np.nanmin(dataframe[diam].values) #global minimum
-            end_conc = (closest_maximum + min_conc) * 0.5 #(N_max + N_min)/2 * 1.4
+            end_conc = (closest_maximum + min_conc) * 0.5 #(N_max + N_min)/2 
 
             #estimate time for maximum concentration
             max_conc_time = df_subset.index[df_subset == closest_maximum].tolist()[0] #rough estimate of maximum concentration time 
@@ -421,6 +422,7 @@ def maximum_concentration(df_modes):
     max_conc_diameter = []
     max_conc = []
     fitting_params = []
+    mode_edges = []
 
     #extract values from dataframe
     mode_values = df_modes.values
@@ -461,9 +463,11 @@ def maximum_concentration(df_modes):
                 max_conc_time = np.append(max_conc_time,popt[1]+x_min) #CHANGE TO JUST APPEND???
                 max_conc_diameter = np.append(max_conc_diameter,diam)
                 max_conc = np.append(max_conc,popt[0]+y_min)
-                
-                #gaussian fit parameters with start and end times and minimum concentration of horizontal mode
-                fitting_params.append([start_time, end_time, popt[0]+y_min, popt[1]+x_min, popt[2]])                               
+
+                #save gaussian fit parameters and mode edges for channel plotting 
+                fitting_params.append([diam,popt[0], popt[1]+x_min, popt[2]]) #[diam,a,mu,sigma]
+                mode_edges.append([diam,start_time,end_time]) #[diameter,start time, end time]
+                                           
         except:
             pass
             #print("Diverges. Skipping.")
@@ -472,7 +476,7 @@ def maximum_concentration(df_modes):
     max_conc_time = [dt.replace(tzinfo=None) for dt in mdates.num2date(max_conc_time)]
     max_conc_time = np.array(max_conc_time)
     
-    return max_conc_time, max_conc_diameter, max_conc, fitting_params, start_times, end_times, mode_diams
+    return max_conc_time, max_conc_diameter, max_conc, fitting_params, mode_edges
 def appearance_time(df_modes):
     '''
     Calculates the appearance times.
@@ -491,6 +495,7 @@ def appearance_time(df_modes):
     appear_diameter = []
     mid_conc = []
     fitting_params = []
+    mode_edges = []
     
     #extract values from dataframe
     mode_values = df_modes.values
@@ -534,8 +539,8 @@ def appearance_time(df_modes):
                 x_sliced = x[:max_conc_index+1]
                 y_sliced = y[:max_conc_index+1]
                 
-                #logistic fit
-                if len(y_sliced) != 0:
+                #logistic fit for more than 2 datapoints
+                if len(y_sliced) > 2: 
                     #initial guess for parameters
                     L = popt[0] #maximum value of gaussian fit (concentration)
                     x0 = np.nanmean(x_sliced) #midpoint x value (appearance time)
@@ -549,10 +554,14 @@ def appearance_time(df_modes):
                         else:
                             appear_time = np.append(appear_time,popt[1]+x_min) #make a list of times with the appearance time in each diameter
                             appear_diameter = np.append(appear_diameter,diam) 
-                            mid_conc.append((popt[0]+y_min)/2) #appearance time concentration (~50% maximum concentration), L/2, y_min to preserve shape of graph
+                            mid_conc.append(((popt[0]+y_min)+y_min)/2) #appearance time concentration (~50% maximum concentration), L/2
 
-                            #logistic fit parameters with time range and minimum concentration of horizontal mode
-                            fitting_params.append([start_time, end_time, popt[0]+y_min, popt[1]+x_min, popt[2]])                                 
+                            #save logistic fit parameters and mode edges for channel plotting 
+                            fitting_params.append([diam, y_min, popt[0], popt[1]+x_min, popt[2]]) #[diam,y min for scale,L,x0,k]
+                            
+                            start_time_logi = mdates.num2date(x_sliced[0]+x_min).replace(tzinfo=None) #in days
+                            end_time_logi = mdates.num2date(x_sliced[-1]+x_min).replace(tzinfo=None)
+                            mode_edges.append([diam,start_time_logi,end_time_logi]) #[diameter,start time, end time]
                     except:
                         pass
                         #print("Logistic diverges. Skipping.")                            
@@ -564,7 +573,7 @@ def appearance_time(df_modes):
     appear_time = [dt.replace(tzinfo=None) for dt in mdates.num2date(appear_time)]
     appear_time = np.array(appear_time)
 
-    return appear_time, appear_diameter, mid_conc, fitting_params
+    return appear_time, appear_diameter, mid_conc, fitting_params, mode_edges
 def init_methods(dataframe,mpd,threshold_deriv):
     '''
     Goes through all ranges and calculates the points for maximum concentration
@@ -581,27 +590,41 @@ def init_methods(dataframe,mpd,threshold_deriv):
     df_modes, threshold_deriv, start_times_list, maxima_list = find_modes(df_filtered,df_deriv,mpd,threshold_deriv)
     
     #methods
-    mc_x, mc_y, mc_z, mc_params, mode_starts, mode_ends, mode_diams = maximum_concentration(df_modes)
-    at_x, at_y, at_z, at_params = appearance_time(df_modes)
+    mc_x, mc_y, mc_z, mc_params, mode_edges_gaussian = maximum_concentration(df_modes)
+    at_x, at_y, at_z, at_params, mode_edges_logistic = appearance_time(df_modes)
     print("Fitting done! (2/4) "+"(%s seconds)" % (time() - start_time))
     
     #combine to same lists
     maxcon_xyz = [mc_x,mc_y,mc_z]
     appear_xyz = [at_x,at_y,at_z]
     
-    return maxcon_xyz, appear_xyz, mc_params, at_params, mode_starts, mode_ends, mode_diams, threshold_deriv, start_times_list, maxima_list
+    return maxcon_xyz, appear_xyz, mc_params, at_params, mode_edges_gaussian, mode_edges_logistic, threshold_deriv, start_times_list, maxima_list
 xyz_maxcon, xyz_appear, *others = init_methods(df,mpd=maximum_peak_difference,threshold_deriv=derivative_threshold)
 
 ################## GROWTH RATES ####################
 
+def points_in_existing_line(unfinished_lines, point, nearby_point=None):
+    score = False
+    if nearby_point is None:
+        if any(point in line for line in unfinished_lines):
+            score = True
+    else:
+        if any(point in line for line in unfinished_lines) or any(nearby_point in line for line in unfinished_lines):
+            score = True
+    return score
+def extract_data(line,exclude_start=0,exclude_end=0):
+    return ([point[1] for point in line[exclude_start:len(line)-exclude_end]],  #x values
+            [point[0] for point in line[exclude_start:len(line)-exclude_end]])  #y values
+    
 def find_dots(times,diams,mtd,a,gret):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
-    Returns lists with wanted times and diameters for plotting growth rates.
+    Returns lists with times and diameters for plotting growth rates.
     
     gret = growth rate error threshold for filtering bigger changes in gr when adding new points to lines
     mtd = maximum time difference between current point and nearby point to add to line
+    mae = mean average error
     '''
     #convert time to days
     times = mdates.date2num(times)
@@ -612,173 +635,142 @@ def find_dots(times,diams,mtd,a,gret):
     #init
     unfinished_lines = []
     finalized_lines = []
-    df_maes = pd.DataFrame()
+    df_maes = pd.DataFrame()   
     
-    base_max_time_diff = mtd/24 #max time difference in days
-    higher_max_time_diff = 180/(60*24) #180mins = 3h
-    
-    #iterate through each datapoint to find suitable pairs of mode fitting datapoints
+    #iterate over each datapoint to find suitable pairs of mode fitting datapoints
     for datapoint in data_sorted:
-        time0, diam0 = datapoint #current datapoint
+        time0, diam0 = datapoint
+        datapoint = tuple(datapoint)
         
-        #iterate through diameter channels after current datapoint and look for the nearest datapoint in that channel
-        for ii in range(1,3): #one step represents one diam channel, allows one channel in between
-            #print(i,ii)
-            #diameter for current iteration
-            diam_channel = df.columns.values[df.columns.values >= diam0][ii]
-            
-            #search for datapoints in this diameter channel
+        #iterate over diameter channels after current datapoint and look for the nearest datapoint
+        for ii in range(1,3): #allows one channel in between
+            diam_channel = df.columns.values[df.columns.values >= diam0][ii] #diam in current bin
+            diam_diff = diam_channel-diam0
             channel_points = [point for point in data_sorted if point[1] == diam_channel]
-            if not channel_points: #skip if no datapoints in current channel
+            
+            #skip if no datapoints in current channel
+            if not channel_points: 
                 continue
             
-            #closest datapoint
-            nearby_datapoint = tuple(min(channel_points, key=lambda point: abs(point[0] - time0)))
-            time_diff = abs(nearby_datapoint[0] - time0)
+            #allowed time difference depends on growth rate and diam difference between last and new point
+            low_time_limit = time0-mtd/24 #days
+            high_time_limit = time0+mtd/24
             
-            max_time_diff = base_max_time_diff #MAKE THIS BETTER LATER
+            closest_channel_points = [point for point in channel_points if point[0] >= low_time_limit and point[0] <= high_time_limit]
+            
+            #skip if no datapoints in current channel
+            if not closest_channel_points: 
+                continue
+            
+            #find nearest new point 
+            nearby_datapoint = tuple(min(channel_points, key=lambda point: abs(point[0] - time0)))
+            time1 = nearby_datapoint[0]
+            
+            if points_in_existing_line(unfinished_lines,datapoint):
+                #find index of that line
+                for line in unfinished_lines:
+                    if datapoint in line and len(line) > 2:
+                        #calculate growth rate
+                        x, y = extract_data(line) #x=diams,y=times
+                        popt, pcov = curve_fit(linear, x, y)
+                        GR = 1/(popt[0]) #nm/days
+                        
+                        min_time = min(mdates.date2num(df.index))
+                        b = 1.5/24 #1.5 hours
+                        low_time_limit = 1/(abs(GR) * 1.5) * diam_diff - b + time0 #days
+                        high_time_limit = 1.5/abs(GR) * diam_diff + b + time0
+                        
+                        #minimize MAE when choosing the new point
+                        maes = []
+                        for point in closest_channel_points:
+                            line_with_new_point = line + [point]
+                            x, y = extract_data(line_with_new_point) #x=diams,y=time
+                            popt, pcov = curve_fit(linear, x, y)
+                            mae = cal_mae(x,y,popt)
+                            maes.append(mae)
 
-            #check time difference
-            if time_diff <= max_time_diff: 
-                #if datapoint and nearby datapoint is not already in a line
-                if not any(tuple(datapoint) in line for line in unfinished_lines) and not any(nearby_datapoint in line for line in unfinished_lines):
-                    unfinished_lines.append([tuple(datapoint),nearby_datapoint])
-                
-                #datapoint is already in a line
-                elif any(tuple(datapoint) in line for line in unfinished_lines):
+                        min_mae_i = maes.index(min(maes))
+                        nearby_datapoint = tuple(closest_channel_points[min_mae_i])
+                        break
+
+            time_diff = abs(nearby_datapoint[0] - time0)
+
+            
+            if time1 >= low_time_limit and time1 <= high_time_limit: 
+            #if time_diff <= max_time_diff: 
+                ### add new point to a line ###
+                if not points_in_existing_line(unfinished_lines,datapoint,nearby_datapoint):
+                    unfinished_lines.append([datapoint,nearby_datapoint])
+                    
+                elif points_in_existing_line(unfinished_lines,datapoint,nearby_datapoint):
                     #find index of that line
-                    for line_i, line in enumerate(unfinished_lines):
-                        if tuple(datapoint) in line:
-                            #add nearby datapoint to that line
-                            unfinished_lines[line_i].append(nearby_datapoint)
+                    for line in unfinished_lines:
+                        if datapoint in line:
+                            print(line)
+                            line.append(nearby_datapoint)
+                            break
                 
                 #make sure datapoints in every line are sorted by diameter
                 unfinished_lines = [list(set(line)) for line in unfinished_lines]
                 unfinished_lines = [sorted(sublist, key=lambda x: x[1]) for sublist in unfinished_lines] 
 
-                #make a linear fit to check mape for line with new datapoint
+
+                ### make a linear fit to check mae for line with new datapoint ###
                 iii, current_line = [(i,line) for i,line in enumerate(unfinished_lines) if nearby_datapoint in line][0]
                 
+                #define variables for linear fit
+                x, y = extract_data(current_line) #x=diams,y=times
+                x_last_excluded, y_last_excluded = extract_data(current_line,exclude_end=1)
+                x_first_excluded, y_first_excluded = extract_data(current_line,exclude_start=1)
                 
-                ##check the length of current line##
-                if len(current_line) <= 2: #pointless to analyze mape with less than 3 datapoints
-                    break #proceed to next line
+                if len(current_line) <= 2:
+                    break #proceed to next datapoint
                 elif len(current_line) == 3:
-                    x = [datapoint[1] for datapoint in current_line] #diams
-                    y = [datapoint[0] for datapoint in current_line] #times
                     popt, pcov = curve_fit(linear, x, y)
                     mae = cal_mae(x,y,popt)
                 else:
-                    #do fit to previous datapoints and calculate mape with the new datapoint included
-                    x_last_excluded = [datapoint[1] for datapoint in current_line[:-1]] #diams
-                    y_last_excluded = [datapoint[0] for datapoint in current_line[:-1]] #times
+                    #fit to line excluding last datapoint, but calculate mae with full line
                     popt_last_excluded, pcov = curve_fit(linear, x_last_excluded, y_last_excluded)
-
-                    #calculate mape with all points but popt of line without the last point
-                    x = [datapoint[1] for datapoint in current_line] #diams
-                    y = [datapoint[0] for datapoint in current_line] #times
-                    mae_last_excluded = cal_mape(x,y,popt_last_excluded) # %
                     GR_last_excluded = 1/(popt_last_excluded[0]*24) #nm/h
                     
-                    #check mape of the whole line also
+                    #fit to full line
                     popt, pcov = curve_fit(linear, x, y)
                     mae = cal_mae(x,y,popt)
                     GR = 1/(popt[0]*24)
                     
-                    mae_absolute_error = abs(mae_last_excluded-mae)
-                    gr_abs_error = abs(GR-GR_last_excluded)
+                    gr_abs_precentage_error = abs(GR-GR_last_excluded) / abs(GR_last_excluded) * 100
 
                 
-                #thresholds    
+                ### check mae and gr error thresholds ###
                 mae_threshold = a*len(current_line)**(-1) #a*x^(-1)
                 gr_error_threshold = gret
                 
-                #printing
-                # for time,diam in current_line:
-                #         print("time:",mdates.num2date(time).replace(tzinfo=None),"diameter:",diam)
-                # print("length of line:",len(current_line))
-                # print(f"mae threshold:",mae_threshold,"mae:",mae)
-                # if len(current_line) > 3:
-                #     print("gr_abs_error:",gr_abs_error)
-                # print()
-                
-                #check mape and gr error threshold
                 if mae > mae_threshold:
-                    #mape without first datapoint of line
-                    x = [datapoint[1] for datapoint in current_line[1:]]
-                    y = [datapoint[0] for datapoint in current_line[1:]] #diams
-                    popt, pcov = curve_fit(linear, x, y)
-                    mae_no_first = cal_mae(x,y,popt)
+                    #calculate mae without the first and then last datapoint 
+                    popt, pcov = curve_fit(linear, x_first_excluded, y_first_excluded)
+                    mae_no_first = cal_mae(x_first_excluded,y_first_excluded,popt) 
                     
-                    #without last datapoint
-                    x = [datapoint[1] for datapoint in current_line[:-1]]
-                    y = [datapoint[0] for datapoint in current_line[:-1]] #diams
-                    popt, pcov = curve_fit(linear, x, y)
-                    mae_no_last = cal_mae(x,y,popt)
+                    popt, pcov = curve_fit(linear, x_last_excluded, y_last_excluded)
+                    mae_no_last = cal_mae(x_last_excluded,y_last_excluded,popt)
                     
-                    #if mape is smaller without the last datapoint remove last datapoint
-                    #if the line is shorter than 4 give another chance for shorter lines to start anew
+                    #remove last or first point based on mae comparison
                     if mae_no_last <= mae_no_first and len(current_line) > 4:
                         unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
-                        
-                        #allow lines to start from the same point as others end in
-                        #save current line to another list and add the ending point as the start for a new line
                         finalized_lines.append(current_line[:-1])
-                        unfinished_lines.append([tuple(datapoint),nearby_datapoint])
-
+                        unfinished_lines.append([datapoint,nearby_datapoint]) #new line starts with end of previous one
                     else:
-                        #remove first point in current line from unfinished lines
+                        unfinished_lines[iii] = current_line[1:] #another chance for shorter lines
+                
+                elif len(current_line) > 3 and gr_abs_precentage_error > gr_error_threshold:
+                    #remove last point if threshold is exceeded
+                    if len(current_line) > 4:
+                        #delete line with recently added datapoint from unfinished lines
+                        unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
+                        finalized_lines.append(current_line[:-1])
+                        unfinished_lines.append([datapoint,nearby_datapoint])
+                    else:
                         unfinished_lines[iii] = current_line[1:]
-                
-                elif len(current_line) > 4 and gr_abs_error > gr_error_threshold:
-                    #delete line with recently added datapoint from unfinished lines
-                    unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
-                    
-                    #allow lines to start from the same point as others end in
-                    #save current line to another list and add the ending point as the start for a new line
-                    finalized_lines.append(current_line[:-1])
-                    unfinished_lines.append([tuple(datapoint),nearby_datapoint])
-                    
-                #give another chance for short lines
-                elif len(current_line) == 4 and gr_abs_error > gr_error_threshold:
-                    #remove first point in current line from unfinished lines
-                    unfinished_lines[iii] = current_line[1:]
 
-                
-                '''
-                #try splitting line into two parts from the middle to lower mape
-                #does it when all lines haven't been found yet
-                if len(combined[iii]) >= 8: #at least 8 datapoints needed
-                    middle_index = int(len(combined[iii])/2) #rounding down with int()
-                    line_1st_half = combined[iii][:middle_index]
-                    #uneven numbers include one more element in the 2nd half
-                    line_2nd_half = combined[iii][-middle_index:] if len(combined[iii])%2 == 0 else combined[iii][-(middle_index+1):]
-                    
-                    #calculate if mape lowered significantly
-                    x = [datapoint[1] for datapoint in line_1st_half]
-                    y = [datapoint[0] for datapoint in line_1st_half] #times
-                    popt, pcov = curve_fit(linear, x, y)
-                    mape1 = cal_mape(x,y,popt)
-                    
-                    x = [datapoint[1] for datapoint in line_2nd_half]
-                    y = [datapoint[0] for datapoint in line_2nd_half] #times
-                    popt, pcov = curve_fit(linear, x, y)
-                    mape2 = cal_mape(x,y,popt)
-                    
-                    #relative change in mape
-                    rel_diff1 = ((mape1-mape)/mape) * 100
-                    rel_diff2 = ((mape2-mape)/mape) * 100
-                    
-                    #if mape improves (decreases) by 40% split line in two
-                    if rel_diff1 <= -40 or rel_diff2 <= -40:
-                        #remove the second half of current line and add it as its own line
-                        combined[iii] = line_1st_half
-                        combined.append(line_2nd_half)
-                        
-                        #remove from data_pairs also
-                        connecting_pair = [line_1st_half[-1],line_2nd_half[0]]
-                        data_pairs = [pair for pair in data_pairs if not np.array_equal(connecting_pair, pair)]
-                    '''
                 break
             else: #keep looking for next datapoint until end of points if the next one isnt suitable
                 continue
@@ -787,14 +779,15 @@ def find_dots(times,diams,mtd,a,gret):
     finalized_lines.extend(unfinished_lines)
     finalized_lines = [sorted(line, key=lambda x: x[1]) for line in finalized_lines] 
     
-    #try splitting line into two parts from the middle to lower mape
+    '''
+    #try splitting line into two parts from the middle to lower mae
     for i, finalized_line in enumerate(finalized_lines):
         if len(finalized_line) >= 7: #at least 7 datapoints needed  
             middle_index = len(finalized_line)//2
             line_1st_half = finalized_line[:middle_index+1] #overlap +1
             line_2nd_half = finalized_line[middle_index:]
             
-            #calculate if mape lowered in both halves
+            #calculate if mae lowered in both halves
             #whole line
             x = [datapoint[1] for datapoint in finalized_line]
             y = [datapoint[0] for datapoint in finalized_line] #diams
@@ -817,11 +810,10 @@ def find_dots(times,diams,mtd,a,gret):
                 #remove the second half of current line and add it as its own line to finalized lines
                 finalized_lines[i] = line_1st_half
                 finalized_lines.append(line_2nd_half)  
-    
-    #calculate mapes to show on plot
+    '''
+    #calculate maes to show on plot
     for finalized_line in finalized_lines:
-        x = [datapoint[1] for datapoint in finalized_line]
-        y = [datapoint[0] for datapoint in finalized_line] #diams
+        x, y = extract_data(finalized_line) #x=diams,y=times
         popt, pcov = curve_fit(linear, x, y)
         mae = cal_mae(x,y,popt)
         
@@ -831,6 +823,7 @@ def find_dots(times,diams,mtd,a,gret):
     df_maes.to_csv('./df_maes.csv', sep=',', header=True, index=True, na_rep='nan')
     
     return finalized_lines
+
 def filter_dots(datapoints):
     '''
     Filter datapoints of lines that are too short or
@@ -852,7 +845,7 @@ def filter_dots(datapoints):
 
                 #mape is not the same in different scales so here the threshold must be stricter
                 #maximum mape 1% and GR is not bigger than +-15nm/h
-                if mape <= 100 and abs(GR) <= 400:
+                if mape <= 100 and abs(GR) <= 15000:
                     filtered_datapoints.append(line)
                     break
                 else:
@@ -1021,7 +1014,7 @@ def plot_PSD(dataframe,show_mae,mtd,a,gret):
     plt.xlabel("time",fontsize=14) #add y-axis label
     
     print("Plotting done! (4/4) "+"(%s seconds)" % (time() - st))
-plot_PSD(df,show_mae,maximum_time_difference_dots,mae_threshold_factor,gr_error_threshold)
+plot_PSD(df,show_mae,maximum_time_difference_dots,mae_threshold_factor,gr_precentage_error_threshold)
 
 def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_and_maxima):
     '''
@@ -1035,16 +1028,17 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
     '''   
     
     '''1 assemble all datasets'''
-    xyz_maxcon, xyz_appear, fitting_parameters_gaus, fitting_parameters_logi, \
-        mode_starts, mode_ends, mode_diams, threshold_deriv, start_times_list, maxima_list = init_methods(dataframe,mpd,threshold_deriv)
+    xyz_maxcon, xyz_appear, fitting_parameters_gaus, \
+        fitting_parameters_logi, mode_edges_gaussian, mode_edges_logistic, \
+        threshold_deriv, start_times_list, maxima_list = init_methods(dataframe,mpd,threshold_deriv)
 
     '''2 define lists and their shapes'''
-    mode_edges = []             #[(diameter,start_time (UTC),end_time (UTC)), ...]
     xy_maxcon =  []             #[(max con diameter, max con time (UTC), max con), ...]
-    fitting_params_gaus = []    #[(max con diameter, mode start time UTC, mode end time UTC, *params...), ...]
-    fitting_params_logi = []    #[(appearance time diameter, mode start time UTC, mode end time UTC, *params...), ...]
-    mode_times = []             #[(diameter, time UTC), ...]
+    fitting_params_gaus = []    #[(max con diameter, *params...), ...]
+    fitting_params_logi = []    #[(appearance time diameter, y min for scale, *params...), ...]
     appearances = []            #[(diameter, time (UTC), concentration), ...] 
+    mode_edges_gaus = []
+    mode_edges_logi = []
 
     '''3 find data in datasets with chosen diameters'''
     diameter_list = [df.columns[i] for i in diameter_list_i]
@@ -1055,15 +1049,9 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
         xy_maxcons = [(xyz_maxcon[1][b],xyz_maxcon[0][b],xyz_maxcon[2][b]) for b in indices]
         [xy_maxcon.append(i) for i in xy_maxcons]
 
-        #FITTING PARAMETERS FOR GAUSSIAN FIT
-        indices = [i for i, a in enumerate(xyz_maxcon[1]) if a == diam]
-        fittings = [(xyz_maxcon[1][b],fitting_parameters_gaus[b][0],fitting_parameters_gaus[b][1],fitting_parameters_gaus[b][2],fitting_parameters_gaus[b][3],fitting_parameters_gaus[b][4]) for b in indices]
-        [fitting_params_gaus.append(i) for i in fittings]
-
-        #FITTING PARAMETERS FOR LOGISTIC FIT
-        indices = [i for i, a in enumerate(xyz_appear[1]) if a == diam]
-        fittings = [(xyz_appear[1][b],fitting_parameters_logi[b][0],fitting_parameters_logi[b][1],fitting_parameters_logi[b][2],fitting_parameters_logi[b][3],fitting_parameters_logi[b][4]) for b in indices]
-        [fitting_params_logi.append(i) for i in fittings]
+        #FITTING PARAMETERS
+        [fitting_params_gaus.append(params) for params in fitting_parameters_gaus if params[0] == diam]
+        [fitting_params_logi.append(params) for params in fitting_parameters_logi if params[0] == diam]
 
         #APPEARANCE TIME & CONCENTRATION
         indices = [i for i, a in enumerate(xyz_appear[1]) if a == diam]
@@ -1071,15 +1059,9 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
         [appearances.append(i) for i in appearance]
         
         #MODE EDGES
-        indices = [i for i, a in enumerate(mode_diams) if a == diam]
-        mode_edges_diam = [(mode_diams[b],mode_starts[b],mode_ends[b]) for b in indices]
-        [mode_edges.append(i) for i in mode_edges_diam]
-        
-        #MODE TIMES
-        for diam, start, end in mode_edges_diam:
-            subset = df.loc[start:end,diam]
-            mode_t = subset.index
-            mode_times.append((diam,mode_t))
+        [mode_edges_gaus.append(mode) for mode in mode_edges_gaussian if mode[0] == diam]
+        [mode_edges_logi.append(mode) for mode in mode_edges_logistic if mode[0] == diam]
+
 
     '''4 plotting'''
     fig, ax1 = plt.subplots(len(diameter_list),2,figsize=(9, 4.7), dpi=300)
@@ -1147,42 +1129,45 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
                 found_ranges.append(edges) #plot the same range once
         '''
 
-        # #right axis (logarithmic scale)
-        # ax2 = ax1[row_num,0].twinx()
-        # color2 = "cadetblue"
-        # ax2.set_ylabel("log(dN/dlogDp) (cm⁻³)", color=color2, fontsize=8) 
-        # ax2.plot(x, y, color=color2, lw=1)
-        # for item in ([ax2.title, ax2.xaxis.label, ax2.yaxis.label] + ax2.get_xticklabels() + ax2.get_yticklabels()):
-        #     item.set_fontsize(8)
-        #     item.set_fontweight("bold")
-        # ax2.tick_params(axis='y', labelcolor=color2)
-        # ax2.set_yscale('log')
-
+        '''
+        #right axis (logarithmic scale)
+        ax2 = ax1[row_num,0].twinx()
+        color2 = "cadetblue"
+        ax2.set_ylabel("log(dN/dlogDp) (cm⁻³)", color=color2, fontsize=8) 
+        ax2.plot(x, y, color=color2, lw=1)
+        for item in ([ax2.title, ax2.xaxis.label, ax2.yaxis.label] + ax2.get_xticklabels() + ax2.get_yticklabels()):
+            item.set_fontsize(8)
+            item.set_fontweight("bold")
+        ax2.tick_params(axis='y', labelcolor=color2)
+        ax2.set_yscale('log')
+        '''
+        
         #gaussian fit 
-        for params in fitting_params_gaus:
-            diam, start_time, end_time, a, mu, sigma = params
-
-            for time_UTC in mode_times:
-                if diam == diameter_list[row_num] and time_UTC[1][0] == start_time and time_UTC[1][-1] == end_time: #check that plotting happens in the right mode
-                    #convert time to days
-                    time_days = mdates.date2num(time_UTC[1])
-                    
-                    line2, = ax1[row_num,0].plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
-                    lines_and_labels.add((line2,"gaussian fit"))
-                    #ax2.plot(time_UTC[1], gaussian(time_days,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
+        for params, edges in zip(fitting_params_gaus,mode_edges_gaus):
+            diam_params, a, mu, sigma = params
+            diam_gaus, start_time, end_time = edges 
+            
+            mode_times_UTC = dataframe.loc[start_time:end_time,diam].index
+            mode_times = mdates.date2num(mode_times_UTC) #time to days
+            mode_concs = dataframe.loc[start_time:end_time,diam].values
+            
+            if diam_params == diameter_list[row_num] and diam_gaus == diameter_list[row_num]: #check that plotting happens in the right channel
+                line2, = ax1[row_num,0].plot(mode_times_UTC, gaussian(mode_times,a,mu,sigma)+min(mode_concs), '--', color="mediumturquoise",lw=1.2)
+                lines_and_labels.add((line2,"gaussian fit"))
+                #ax2.plot(mode_times_UTC, gaussian(mode_times,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
         
         #logistic fit
-        for params in fitting_params_logi:
-            diam, start_time, end_time, L, x0, k = params
+        for params, edges_logi in zip(fitting_params_logi,mode_edges_logi):
+            diam_params, y_min, L, x0, k = params
+            diam_logi, start_time_logi, end_time_logi = edges_logi
 
-            for time_UTC in mode_times:     
-                if diam == diameter_list[row_num] and time_UTC[1][0] == start_time and time_UTC[1][-1] == end_time: #check that plotting happens in the right mode
-                    #convert time to days
-                    time_days = mdates.date2num(time_UTC[1])
-                    
-                    line3, = ax1[row_num,0].plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="gold",lw=1.2)
-                    lines_and_labels.add((line3,"logistic fit"))
-                    #ax2.plot(time_UTC[1], logistic(time_days,L,x0,k), '--', color="gold",lw=1.2)
+            mode_times_UTC = dataframe.loc[start_time_logi:end_time_logi,diam].index
+            mode_times = mdates.date2num(mode_times_UTC) #time to days
+     
+            if diam_params == diameter_list[row_num] and diam_logi == diameter_list[row_num]:
+                line3, = ax1[row_num,0].plot(mode_times_UTC, logistic(mode_times,L,x0,k)+y_min, '--', color="gold",lw=1.2)
+                lines_and_labels.add((line3,"logistic fit"))
+                #ax2.plot(mode_times_UTC, logistic(mode_times,L,x0,k), '--', color="gold",lw=1.2)
 
         #maximum concentration
         for i in xy_maxcon:
@@ -1210,7 +1195,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
 
 
     #PLOTS ON THE RIGHT
-    df_1st_derivatives = cal_derivative(df)
+    df_1st_derivatives = cal_derivative(dataframe)
 
     x = df_1st_derivatives.index #time
     y_list = [df_1st_derivatives[diam] for diam in diameter_list] #concentrations
@@ -1232,7 +1217,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
         
         #start and end points of modes
         found_ranges = []
-        for edges in mode_edges:
+        for edges in mode_edges_gaus:
             diam, start, end = edges
             if diam == diameter_list[row_num] and edges not in found_ranges:
                 line7 = ax1[row_num,1].axvspan(start, end, alpha=0.18, color='darkorange')
