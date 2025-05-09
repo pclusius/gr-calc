@@ -1,12 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue May  7 19:54:10 2024
-Modified on ???
-
-@author: unfer
-@modified: bouhlal
-"""
-
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -21,9 +12,12 @@ from scipy import stats
 from os import listdir ###
 import json ###
 from operator import itemgetter ###
-from collections import defaultdict ###
 import time ###
 import matplotlib.dates as mdates ###
+
+#choose dates
+start_date = "2016-04-10"
+end_date = "2016-04-12"
 
 ## parameters ##
 show_mape = False #show mape values of lines instead of growth rates, unit %
@@ -31,116 +25,43 @@ mape_threshold_factor = 15 #a*x^(-1) (constant a that determines mean average er
 gr_error_threshold = 60 #% (precentage error of growth rates when adding new points to gr lines)
 
 ###################################################################
-#paths = "./dmps Nesrine/dm160401.sum" ###path to data file
-folder = "./dmps Nesrine/" #folder with data files
-#dados1= pd.read_csv(paths,sep='\s+',engine='python') ###steps to '\s+'
-#df1 = pd.DataFrame(dados1)
 
-#file_names = ["dm160612.sum"]
-file_names = ["dm160410.sum","dm160411.sum","dm160412.sum"]
-#file_names = ["dm160426.sum","dm160427.sum","dm160428.sum"]
+#load data and convert time columns to timestamps
+df1 = pd.DataFrame(pd.read_csv('smeardata_20250506.csv',sep=',',engine='python'))
+df1['timestamp'] = pd.to_datetime(df1[['Year', 'Month', 'Day', 'Hour', 'Minute', 'Second']])
+df1 = df1.set_index('timestamp')
+df1 = df1.drop(['Year','Month','Day','Hour','Minute','Second'], axis=1)
 
-#set epoch
-start_date_str = f"20{file_names[0][2:4]}-{file_names[0][4:6]}-{file_names[0][6:8]} 00:00:00"
-matplotlib.dates.set_epoch(start_date_str)
+#drop bins with no data
+df1 = df1.dropna(axis=1, how='all')
 
-### load data for n days: ###
-def combine_data(files,separation):
-    dfs = []
-    test = True
-    #load all given data files and save them a list
-    for i in files:
-        #choose the right path
-        if separation == '\s+':
-            df = pd.DataFrame(pd.read_csv(folder + i,sep=separation,engine='python'))
-        elif separation == ',':
-            df = pd.DataFrame(pd.read_csv(i,sep=separation,engine='python'))
+#select wanted time period and shift times by 15minutes forward
+df1_selected = df1.loc[start_date:end_date].shift(periods=15, freq='Min')
 
-        #make sure all columns have the same diameter values, name all other columns with the labels of the first one
-        if test == True:
-            diameter_labels = df.columns
-            test = False
-        df.rename(columns=dict(zip(df.columns, diameter_labels)), inplace=True)
-        dfs.append(df) #add dataframe to list
-    #combine datasets
-    combined_data = pd.concat(dfs,axis=0,ignore_index=True)
-    return combined_data
-df1 = combine_data(file_names,separation='\s+')
+#put diameter bins in order
+sorted_columns = sorted(df1_selected.columns, key=lambda column: (int(column.split('e')[-1]) , int(column[10:13])))
+df1_selected = df1_selected[sorted_columns]
 
-###----
-
-diameters = df1.columns[2:].astype(float)*10**9 ### save diameters as floats before replacing them with new column names / units from m to nm
-df1.columns = ["time (d)", "total number concentration (N)"] + [f"dN/dlogDp_{i}" for i in range(1,df1.shape[1]-1)] ###rename columns
-time_d = df1.iloc[:,0].astype(float) ###ADDED save time as days before changing them to UTC 
-
-#days to UTC times
-df1["time (d)"] = df1["time (d)"] - df1["time (d)"][0] #substract first day ###
-df1["time (d)"] = pd.Series(mdates.num2date(df1["time (d)"])).dt.tz_localize(None) ###
-
-df1.rename(columns={'time (d)': 'Timestamp (UTC)'}, inplace=True) ###CHANGE '# "datetime (UTC)"' -> 'time (d)'
-df1['Timestamp (UTC)']=pd.to_datetime(df1['Timestamp (UTC)'], format="%Y-%m-%d %H:%M:%S")
-df1.index=df1['Timestamp (UTC)']
-df1 = df1.drop(['Timestamp (UTC)'], axis=1)
-
-df1[(df1<0)] = 0                     ## Treat negative data as zero
-df1[(df1.sum(axis=1)==0)] = np.nan   ## Discart a whole zero size distribution
-df1 = df1.dropna()
-
-#df1 = df1.resample('10Min').mean().interpolate(method='time', limit_area='inside', limit=6) ###CHANGE 5Min -> 10Min CHECK FROM HERE UP ###commented away
-
-N_tot = list(df1["total number concentration (N)"]) ### save total number concentrations to a list
-df1 = df1.drop(['total number concentration (N)'], axis=1) ### drop N_tot from the dataframe
-#df1['N_tot'] = (df1.sum(axis=1)*0.0265) ### commented away
-#df1[df1['N_tot']>df1['N_tot'].quantile(0.999)] = np.nan  ### commented away
-#df1 = df1.dropna() ### commented away
-#df1 = df1.drop(['N_tot'], axis=1) ### commented away
-df1.columns = pd.to_numeric(diameters) ### rename columns back to diameters
-
-###
-def avg_filter(dataframe,resolution):
-    '''
-    Smoothens data in dataframe with average filter and given resolution (minutes), 
-    i.e. takes averages in a window without overlapping ranges.
-    Discards blocks of time with incomplete timestamps.
-    Returns smoothened dataframe and new time in days for that dataframe.
-    '''
-
-    dataframe.index = dataframe.index.round('10min') #change timestamps to be exactly 10min intervals
-
-    #if average is taken of less than 3 datapoints, neglect that datapoint
-    full_time_range = pd.date_range(start=dataframe.index.min(), end=dataframe.index.max(), freq='10min')
-    missing_timestamps = full_time_range.difference(dataframe.index) #missing timestamps
-    blocks = pd.date_range(start=dataframe.index.min(), end=dataframe.index.max(), freq=f'{resolution}min') #blocks of resolution
-    
-    dataframe = dataframe.resample(f'{resolution}min').mean() #change resolution and take average of values
-    dataframe = dataframe.shift(1, freq=f'{int(resolution/2)}min') #set new timestamps to be in the middle of the new resolution
-
-    irrelevant_ts = []
-    irrelevant_i = []
-    missing_ts_i = [] #needs to be in order from small to big (for insterting nan values)
-    for timestamp in missing_timestamps:
-        for i in range(len(blocks) - 1):
-            if blocks[i] <= timestamp < blocks[i + 1]: #check if timestamp is in this 30min block
-                irrelevant_ts.append(blocks[i] + pd.Timedelta(minutes=15))  #add 15 minutes to center the block
-                irrelevant_i.append(dataframe.index.get_loc(blocks[i] + pd.Timedelta(minutes=15))) #save index of the block
-                missing_ts_i.append(full_time_range.get_loc(timestamp)) #save indices of missing timestamps
-
-    #remove irrelevant timestamps
-    for dp in dataframe.columns:
-        for ts in irrelevant_ts:
-            dataframe.loc[ts,dp] = np.nan #set nan value for irrelevant datapoints
- 
-    return dataframe
-df1 = avg_filter(df1,resolution=30)
-###
+#replace arbitrary column names by diameter float values
+diameter_ints = []
+for column_str in sorted_columns:
+    number = column_str[10:13]
+    decimal_pos = int(column_str[-1])
+    column_float = float(number[:decimal_pos] + '.' + number[decimal_pos:])
+    diameter_ints.append(column_float)
+diameter_ints[-1] = 1000.0 #set last bin as 1000
+df1_selected.columns = diameter_ints
 
 #with this we can check the format
-df1.to_csv('./combined_data.csv', sep=',', header=True, index=True, na_rep='nan')
+df1_selected.to_csv('./combined_data.csv', sep=',', header=True, index=True, na_rep='nan')
+
+#set epoch
+matplotlib.dates.set_epoch(start_date)
 
 ##############################################################
 ###LOADING A JSON FILE
 
-with open("./modefit_files/10_12042016_mode_fits.json") as file:
+with open("fit_results.json") as file:
     mode_fits = json.load(file)
 
 #processing modefitting data
@@ -155,7 +76,7 @@ for timestamp in mode_fits:
         sigma = gaussians['sigma']
         amplitude = gaussians['amplitude']
 
-        dict_row = {'timestamp':ts,'amplitude':amplitude,'peak_diameter':peak_diams[i]*10**9,'sigma':sigma} #diam unit m to nm
+        dict_row = {'timestamp':ts,'amplitude':amplitude,'peak_diameter':peak_diams[i],'sigma':sigma} #diam unit m to nm
         rows_list.append(dict_row)
 
 df_modefits = pd.DataFrame(rows_list)  
@@ -463,9 +384,9 @@ def plot2_ver2(filter_segs,show_mape):
     fig, ax = plt.subplots(figsize=(14, 5), dpi=200) ### figsize=(12, 3), dpi=300 -> figsize=(12, 5), dpi=200
 
     #colormap
-    x = df1.index[0:]
-    y = df1.columns.astype(float)
-    plt.pcolormesh(x, y, df1[0:].T, cmap='RdYlBu_r', zorder=0, norm=colors.LogNorm(vmin=1e1, vmax=1e4))
+    x = df1_selected.index[0:]
+    y = df1_selected.columns.astype(float)
+    plt.pcolormesh(x, y, df1_selected[0:].T, cmap='RdYlBu_r', zorder=0, norm=colors.LogNorm(vmin=1e1, vmax=1e4))
     ax.set_yscale('log')
     cbar = plt.colorbar(orientation='vertical', shrink=0.8, extend="max", pad=0.04)
     cbar.set_label('dN/dlogDp', size=14)

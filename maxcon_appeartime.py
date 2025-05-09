@@ -1,4 +1,4 @@
-from GR_calculator_unfer_v2_mod import file_names, ax
+from modefitting_GR import ax, df1_selected
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -8,16 +8,11 @@ from matplotlib import use
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from operator import itemgetter
-from collections import defaultdict
 import statsmodels.api as sm
 from sklearn import linear_model
 from warnings import simplefilter
 from scipy.optimize import OptimizeWarning
 from time import time
-import aerosol.functions as af #janne's aerosol functions
-import history.peak_fitting as pf
-import json 
-import xarray as xr
 
 #supressing warnings for curve_fit to avoid crowding of terminal!!
 simplefilter("ignore",OptimizeWarning) 
@@ -26,16 +21,7 @@ simplefilter("ignore",RuntimeWarning)
 #backend changes the interface of plotting
 use("Qt5Agg") 
 
-'''
-This code assumes dmps data.
-- 1st column (skipping the first 0 value):              time in days
-- 2nd column (skipping the first 0 value):              total concentration in current timestamp (row)
-- 1st row (skipping first two 0 values):                diameters in meters, ~3nm-1000nm
-- 3rd column onwards till the end (under diameters):    concentrations, dN/dlog(dp)
-'''
-
 ## parameters ##
-
 #find_modes
 maximum_peak_difference = 2 #hours (time between two peaks in smoothed data (window 3))
 derivative_threshold = 200 #cm^(-3)/h (starting points of horizontal peak areas, determines what is a high concentration) (NOTICE: concentration diff is half of this between timesteps as the resolution is 30min)
@@ -51,84 +37,9 @@ init_plot_channel = False #True to plot channels
 channel_indices = [5] #Indices of diameter channels, 1=small
 show_start_times_and_maxima = True #True to show all possible start times of peak areas (black arrow) and maximas associated
 
-################# DATA FORMATTING #################
-folder = r"./dmps Nesrine/" #folder where data files are stored, should be in the same directory as this code
-file_names = file_names #copy paths from the file "GR_calculator_unfer_v2_modified"
+################## LOADING DATA ###################
 
-#let's define two useful functions
-def combine_data(): 
-    '''
-    Loads dmps data for given days.
-    Returns one dataframe with all given data.
-    '''
-    dfs = [] #list of dataframes
-    
-    #load all given data files and save them in a list
-    for i, file_name in enumerate(file_names):
-        df = pd.DataFrame(pd.read_csv(folder + file_name,sep='\s+',engine='python'))
-        
-        #different dmps data files have slightly different diameter values although they represent the same diameter
-        #name all other columns with the labels of the first one
-        if i == 0:
-            diameter_labels = df.columns
-            
-        df.rename(columns=dict(zip(df.columns, diameter_labels)), inplace=True)
-        dfs.append(df)
-    
-    combined_data = pd.concat(dfs,axis=0,ignore_index=True) #combine dataframes
-    return combined_data
-def avg_filter(dataframe,resolution: int):
-    '''
-    Smoothens data in dataframe with average filter and given resolution (minutes), 
-    i.e. takes averages in a window without overlapping ranges.
-    Discards blocks of time with incomplete timestamps.
-    Returns smoothened dataframe and new time in days for that dataframe.
-    '''
-
-    dataframe.index = dataframe.index.round('10min') #change timestamps to be exactly 10min intervals
-
-    #if average is taken of less than 3 datapoints, neglect that datapoint
-    full_time_range = pd.date_range(start = dataframe.index.min(), end = dataframe.index.max(), freq='10min')
-    missing_timestamps = full_time_range.difference(dataframe.index) #missing timestamps
-    blocks = pd.date_range(start = dataframe.index.min(), end=  dataframe.index.max(), freq=f'{resolution}min') #blocks of resolution
-    
-    dataframe = dataframe.resample(f'{resolution}min').mean() #change resolution and take average of values
-    dataframe = dataframe.shift(1, freq=f'{int(resolution/2)}min') #set new timestamps to be in the middle of the new resolution
-
-    #find irrelevant timestamps
-    irrelevant_ts = []
-    for timestamp in missing_timestamps:
-        for i in range(len(blocks) - 1):
-            if blocks[i] <= timestamp < blocks[i + 1]: #check if timestamp is in this 30min block
-                irrelevant_ts.append(blocks[i] + pd.Timedelta(minutes=15))  #add 15 minutes to center the block
-
-    #remove irrelevant timestamps
-    for dp in dataframe.columns:
-        for ts in irrelevant_ts:
-            dataframe.loc[ts,dp] = np.nan #set nan value for irrelevant datapoints
-            dataframe = dataframe.dropna() #remove these rows   
-
-    return dataframe
-
-df = combine_data()
-df.rename(columns=dict(zip(df.columns[[0,1]], ["time (d)", "total number concentration (N)"])), inplace=True) #rename first two columns
-df = df.drop(['total number concentration (N)'], axis=1) #drop total N concentrations from the dataframe as they're not needed
-
-#days to UTC times
-df["time (d)"] = df["time (d)"] - df["time (d)"][0] #substract first day
-df["time (d)"] = pd.Series(mdates.num2date(df["time (d)"])).dt.tz_localize(None)
-
-#set new UTC timestamps as indices
-df.rename(columns={'time (d)': 'time (UTC)'}, inplace=True)
-df['time (UTC)']=pd.to_datetime(df['time (UTC)'], format="%Y-%m-%d %H:%M:%S")
-df.index=df['time (UTC)']
-df = df.drop(['time (UTC)'], axis=1)
-
-df.columns = pd.to_numeric(df.columns) * 10**9 #set numerical diameters as column headers, units from m to nm
-df = avg_filter(df,resolution=30) #filtering
-
-#with this we can check the format
-#df.to_csv('./data_filtered.csv', sep=',', header=True, index=True, na_rep='nan')
+df = df1_selected
 
 #################### FUNCTIONS #####################
 #useful functions
@@ -214,43 +125,6 @@ def linear(x,k,b):
     return k*x + b
 
 #################### METHODS #######################
-''' jannen koodista
-#change time from dates to days
-df.index = mdates.date2num(df.index)
-fit_results = pf.fit_multimodes(df)
-
-#back to dates
-df.index = [dt.replace(tzinfo=None) for dt in mdates.num2date(df.index)]
-
-#write json data to a file
-with open('fit_results.json', 'w') as output_file:
-	json.dump(fit_results, output_file, indent=2)
-
-#load the results
-with open("fit_results.json") as file:
-    fits = json.load(file)
-
-#making a dataframe from json file
-rows_list = []
-for diam_channel in fits:
-    dp = diam_channel['diameter']
-    peak_ts = diam_channel['peak_timestamps']
-    
-    for i, gaussians in enumerate(diam_channel['gaussians']):
-        mean = gaussians['mean']
-        sigma = gaussians['sigma']
-        amplitude = gaussians['amplitude']
-
-        dict_row = {'diameter':dp,'amplitude':amplitude,'peak_time':peak_ts[i],'sigma':sigma} #diam unit nm
-        rows_list.append(dict_row)
-
-df_fits = pd.DataFrame(rows_list)  
-
-#diameters to index, peak_time days to datetime objects
-df_fits['peak_time'] = [dt.replace(tzinfo=None) for dt in mdates.num2date(df_fits['peak_time'])]
-df_fits.index=df_fits['diameter']
-df_fits = df_fits.drop(['diameter'], axis=1)
-'''
 
 def find_modes(dataframe,df_deriv,mpd,threshold_deriv):
     '''
@@ -990,9 +864,8 @@ def plot_PSD(dataframe,show_mae,mtd,a,gret):
     plt.plot(xyz_maxcon[0], xyz_maxcon[1], '.', alpha=0.8, color='white',mec='black',mew=0.4, ms=6,label='maximum concentration') 
     plt.plot(xyz_appear[0], xyz_appear[1], '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6,label='appearance time')
     
-    # #janne's max con
-    # plt.plot(df_fits['peak_time'].values, df_fits.index, '.', alpha=0.8, color='white',mec='black',mew=0.4, ms=6,label='maximum concentration') 
-    
+    #initialize gr calculation
+    xyz_maxcon, xyz_appear, *others = init_methods(df,mpd=maximum_peak_difference,threshold_deriv=derivative_threshold)
     time_mc, diam_mc, time_at, diam_at = init_find(mtd,a,gret)
     
     #growth rates (and maes)
