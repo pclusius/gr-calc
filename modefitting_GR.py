@@ -136,7 +136,7 @@ def extract_data(line,exclude_start=0,exclude_end=0):
             [point[1] for point in line[exclude_start:len(line)-exclude_end]])  #y values
 ###
 
-def combine_segments_ver2(df,a,gr_error_threshold): ###
+def find_growth(df,a,gr_error_threshold):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
@@ -332,50 +332,31 @@ def combine_segments_ver2(df,a,gr_error_threshold): ###
     
     return finalized_lines
 
-def filter_segments_ver2(combined): ###
+def filter_lines(combined):
     '''
     Filter datapoints of lines that are too short or
     with too big of an error.
     '''
     
     #filter lines shorter than 4
-    combined = [subpoints for subpoints in combined if len(subpoints) >= 4]
+    filtered_lines = [subpoints for subpoints in combined if len(subpoints) >= 4]
     
-    filtered_lines = []
-    for line in combined: 
-        while True:
-            try:
-                x = timestamp_indexing([datapoint[0] for datapoint in line])
-                y = [datapoint[1] for datapoint in line] #diams
-                
-                popt, pcov = curve_fit(linear, x, y)
-                absolute_error = np.abs(linear(x, *popt) - y)
-                mape = np.mean(absolute_error / y) * 100
-                GR = popt[0] * 2
-
-                #maximum error 10% and GR is not bigger than +-10nm/h
-                if mape <= 10 and abs(GR) <= 1000:
-                    filtered_lines.append(line)
-                    break
-                else:
-                    break
-
-            except:
-                print("Linear fit diverges.")
+    #filter lines with too high of a growth rate
+    #???
     
     return filtered_lines
 
-def process_data_ver2(df,a,gr_error_threshold):
+def process_data(df,a,gr_error_threshold):
     start_time = time.time()
-    comb_segs = combine_segments_ver2(df,a=a,gr_error_threshold=gr_error_threshold)
+    growth_lines = find_growth(df,a=a,gr_error_threshold=gr_error_threshold)
     print("--- %s seconds ---" % (time.time() - start_time))
-    print('Combined segments done! (1/2)')
-    filter_segs = filter_segments_ver2(comb_segs)
+    print('Periods of growth found! (1/2)')
+    filtered_lines = filter_lines(growth_lines)
     print('Filtering done! (2/2)')    
  
-    return filter_segs
+    return filtered_lines
 print('\n'+'*********** Processing mode fitting data'+'\n')
-filter_segs = process_data_ver2(df_modefits,mape_threshold_factor,gr_error_threshold) #data from Janne's code
+filter_segs = process_data(df_modefits,mape_threshold_factor,gr_error_threshold) #data from Janne's code
 ###
 
 ###############################################################################

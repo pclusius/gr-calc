@@ -22,7 +22,7 @@ simplefilter("ignore",RuntimeWarning)
 use("Qt5Agg") 
 
 ## parameters ##
-#find_modes
+#find_peak_areas
 maximum_peak_difference = 2 #hours (time between two peaks in smoothed data (window 3))
 derivative_threshold = 200 #cm^(-3)/h (starting points of horizontal peak areas, determines what is a high concentration) (NOTICE: concentration diff is half of this between timesteps as the resolution is 30min)
 
@@ -126,18 +126,18 @@ def linear(x,k,b):
 
 #################### METHODS #######################
 
-def find_modes(dataframe,df_deriv,mpd,threshold_deriv):
+def find_peak_areas(dataframe,df_deriv,mpd,threshold_deriv):
     '''
-    Finds modes with derivative threshold.
+    Finds peak areas with derivative threshold.
     Takes a dataframe with concentrations and time (UTC), 
     dataframe with time derivatives of the concentrations
     and the wanted derivative threshold.
-    Returns dataframe with found modes.
-    mtd = maximum time difference between peaks to be considered the same horizontal "mode"
+    Returns dataframe with found peak areas.
+    mtd = maximum time difference between peaks to be considered the same horizontal peak area
     mcd = minimum concentration difference between starting concentration and peak concentration
     '''
     #initialize variables
-    df_modes = pd.DataFrame()
+    df_peak_areas = pd.DataFrame()
     start_times_list = []
     maxima_list = []
 
@@ -269,13 +269,13 @@ def find_modes(dataframe,df_deriv,mpd,threshold_deriv):
             #save peak areas longer than 3 datapoints
             subset = dataframe[diam].loc[start_time:end_time]
             if len(subset.values) > 3:
-                #df_modes.loc[subset.index,diam] = subset #fill dataframe
+                #df_peak_areas.loc[subset.index,diam] = subset #fill dataframe
                 new_row = pd.DataFrame({"start_time": [start_time], "end_time": [end_time], "diameter": [diam]})
-                df_modes = pd.concat([df_modes,new_row],ignore_index=True)
+                df_peak_areas = pd.concat([df_peak_areas,new_row],ignore_index=True)
                     
-    df_modes.to_csv('./find_modes.csv', sep=',', header=True, index=True, na_rep='nan')
-    return df_modes, threshold_deriv, start_times_list, maxima_list
-def maximum_concentration(df_modes): 
+    df_peak_areas.to_csv('./find_peak_areas.csv', sep=',', header=True, index=True, na_rep='nan')
+    return df_peak_areas, threshold_deriv, start_times_list, maxima_list
+def maximum_concentration(df_peak_areas): 
     '''
     Calculates the maximum concentration.
     Takes in dataframe from wanted area in the PSD.
@@ -287,8 +287,6 @@ def maximum_concentration(df_modes):
     fitting_params =        list of gaussian fit parameters and more:
                             [[start time of mode UTC, end time of mode UTC,
                             parameter A, parameter mu, parameter sigma], ...]
-    dfs_mode_start =        list of dfs with start of mode
-    dfs_mode_end =          list of dfs with end of mode
     threshold_deriv =       chosen derivative threshold value
     '''
     #create lists for results
@@ -296,19 +294,19 @@ def maximum_concentration(df_modes):
     max_conc_diameter = []
     max_conc = []
     fitting_params = []
-    mode_edges = []
+    area_edges = []
 
     #extract values from dataframe
-    mode_values = df_modes.values
-    start_times = mode_values[:,0]
-    end_times = mode_values[:,1]
-    mode_diams = mode_values[:,2]
+    area_values = df_peak_areas.values
+    start_times = area_values[:,0]
+    end_times = area_values[:,1]
+    area_diams = area_values[:,2]
     
     #gaussian fit to every horizontal area of growth
     for i in range(len(start_times)):
         start_time = start_times[i]
         end_time = end_times[i]
-        diam = mode_diams[i]
+        diam = area_diams[i]
         
         #find values from the dataframe
         subset = df.loc[start_time:end_time,diam]
@@ -338,9 +336,9 @@ def maximum_concentration(df_modes):
                 max_conc_diameter = np.append(max_conc_diameter,diam)
                 max_conc = np.append(max_conc,popt[0]+y_min)
 
-                #save gaussian fit parameters and mode edges for channel plotting 
+                #save gaussian fit parameters and peak area edges for channel plotting 
                 fitting_params.append([diam,popt[0], popt[1]+x_min, popt[2]]) #[diam,a,mu,sigma]
-                mode_edges.append([diam,start_time,end_time]) #[diameter,start time, end time]
+                area_edges.append([diam,start_time,end_time]) #[diameter,start time, end time]
                                            
         except:
             pass
@@ -350,8 +348,8 @@ def maximum_concentration(df_modes):
     max_conc_time = [dt.replace(tzinfo=None) for dt in mdates.num2date(max_conc_time)]
     max_conc_time = np.array(max_conc_time)
     
-    return max_conc_time, max_conc_diameter, max_conc, fitting_params, mode_edges
-def appearance_time(df_modes):
+    return max_conc_time, max_conc_diameter, max_conc, fitting_params, area_edges
+def appearance_time(df_peak_areas):
     '''
     Calculates the appearance times.
     Takes in dataframe from wanted area in the PSD.
@@ -369,19 +367,19 @@ def appearance_time(df_modes):
     appear_diameter = []
     mid_conc = []
     fitting_params = []
-    mode_edges = []
+    area_edges = []
     
     #extract values from dataframe
-    mode_values = df_modes.values
-    start_times = mode_values[:,0]
-    end_times = mode_values[:,1]
-    mode_diams = mode_values[:,2]
+    area_values = df_peak_areas.values
+    start_times = area_values[:,0]
+    end_times = area_values[:,1]
+    area_diams = area_values[:,2]
     
     #logistic fit to every horizontal area of growth
     for i in range(len(start_times)):
         start_time = start_times[i]
         end_time = end_times[i]
-        diam = mode_diams[i]
+        diam = area_diams[i]
         
         #find values from the dataframe
         subset = df.loc[start_time:end_time,diam]
@@ -430,12 +428,12 @@ def appearance_time(df_modes):
                             appear_diameter = np.append(appear_diameter,diam) 
                             mid_conc.append(((popt[0]+y_min)+y_min)/2) #appearance time concentration (~50% maximum concentration), L/2
 
-                            #save logistic fit parameters and mode edges for channel plotting 
+                            #save logistic fit parameters and peak area edges for channel plotting 
                             fitting_params.append([diam, y_min, popt[0], popt[1]+x_min, popt[2]]) #[diam,y min for scale,L,x0,k]
                             
                             start_time_logi = mdates.num2date(x_sliced[0]+x_min).replace(tzinfo=None) #in days
                             end_time_logi = mdates.num2date(x_sliced[-1]+x_min).replace(tzinfo=None)
-                            mode_edges.append([diam,start_time_logi,end_time_logi]) #[diameter,start time, end time]
+                            area_edges.append([diam,start_time_logi,end_time_logi]) #[diameter,start time, end time]
                     except:
                         pass
                         #print("Logistic diverges. Skipping.")                            
@@ -447,7 +445,7 @@ def appearance_time(df_modes):
     appear_time = [dt.replace(tzinfo=None) for dt in mdates.num2date(appear_time)]
     appear_time = np.array(appear_time)
 
-    return appear_time, appear_diameter, mid_conc, fitting_params, mode_edges
+    return appear_time, appear_diameter, mid_conc, fitting_params, area_edges
 def init_methods(dataframe,mpd,threshold_deriv):
     '''
     Goes through all ranges and calculates the points for maximum concentration
@@ -458,21 +456,21 @@ def init_methods(dataframe,mpd,threshold_deriv):
     appear_xyz = [] #appearance time
 
     start_time = time()
-    #smoothen data, calculate derivative and define modes
+    #smoothen data, calculate derivative and define peak areas
     df_filtered = average_filter(dataframe,window=3)
     df_deriv = cal_derivative(df_filtered) 
-    df_modes, threshold_deriv, start_times_list, maxima_list = find_modes(df_filtered,df_deriv,mpd,threshold_deriv)
+    df_peak_areas, threshold_deriv, start_times_list, maxima_list = find_peak_areas(df_filtered,df_deriv,mpd,threshold_deriv)
     
     #methods
-    mc_x, mc_y, mc_z, mc_params, mode_edges_gaussian = maximum_concentration(df_modes)
-    at_x, at_y, at_z, at_params, mode_edges_logistic = appearance_time(df_modes)
+    mc_x, mc_y, mc_z, mc_params, peak_area_edges_gaus = maximum_concentration(df_peak_areas)
+    at_x, at_y, at_z, at_params, peak_area_edges_logi = appearance_time(df_peak_areas)
     print("Fitting done! (2/4) "+"(%s seconds)" % (time() - start_time))
     
     #combine to same lists
     maxcon_xyz = [mc_x,mc_y,mc_z]
     appear_xyz = [at_x,at_y,at_z]
     
-    return maxcon_xyz, appear_xyz, mc_params, at_params, mode_edges_gaussian, mode_edges_logistic, threshold_deriv, start_times_list, maxima_list
+    return maxcon_xyz, appear_xyz, mc_params, at_params, peak_area_edges_gaus, peak_area_edges_logi, threshold_deriv, start_times_list, maxima_list
 xyz_maxcon, xyz_appear, *others = init_methods(df,mpd=maximum_peak_difference,threshold_deriv=derivative_threshold)
 
 ################## GROWTH RATES ####################
@@ -490,7 +488,7 @@ def extract_data(line,exclude_start=0,exclude_end=0):
     return ([point[1] for point in line[exclude_start:len(line)-exclude_end]],  #x values
             [point[0] for point in line[exclude_start:len(line)-exclude_end]])  #y values
     
-def find_dots(times,diams,mtd,a,gret):
+def find_growth(times,diams,mtd,a,gret):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
@@ -698,48 +696,27 @@ def find_dots(times,diams,mtd,a,gret):
     
     return finalized_lines
 
-def filter_dots(datapoints):
+def filter_lines(lines):
     '''
     Filter datapoints of lines that are too short or
     with too big of an error.
     '''
     #check length of datapoints for each line
-    datapoints = [subpoints for subpoints in datapoints if len(subpoints) >= 4] #length of at least 4 datapoints
+    filtered_lines = [line for line in lines if len(line) >= 4] #length of at least 4 datapoints
     
-    #check error of possible fitted linear curve
-    filtered_datapoints = []
-    for line in datapoints:
-        i = 1
-        while True:
-                x = [datapoint[1] for datapoint in line] #diams
-                y = [datapoint[0] for datapoint in line] #time
-                popt, pcov = curve_fit(linear, x, y)
-                mape = cal_mape(x,y,popt)
-                GR = 1/(popt[0]*24) #growth rate
+    #filter lines with too high of a growth rate
+    #???
 
-                #mape is not the same in different scales so here the threshold must be stricter
-                #maximum mape 1% and GR is not bigger than +-15nm/h
-                if mape <= 100 and abs(GR) <= 15000:
-                    filtered_datapoints.append(line)
-                    break
-                else:
-                    break
-                #else:
-                #    line = line[:-i] #exclude last elements one by one
-                #    i += 1
-                    #print("deleted",line[-1])
-                    #removed_points.append(line[-1])    #add removed datapoint to another list
-
-    return filtered_datapoints  
+    return filtered_lines  
 def init_find(mtd,a,gret):
     start_time = time()
     #find consequtive datapoints
-    mc_data = find_dots(times=xyz_maxcon[0],diams=xyz_maxcon[1],mtd=mtd,a=a,gret=gret) #maximum concentration
-    at_data = find_dots(times=xyz_appear[0],diams=xyz_appear[1],mtd=mtd,a=a,gret=gret) #appearance time
+    mc_data = find_growth(times=xyz_maxcon[0],diams=xyz_maxcon[1],mtd=mtd,a=a,gret=gret) #maximum concentration
+    at_data = find_growth(times=xyz_appear[0],diams=xyz_appear[1],mtd=mtd,a=a,gret=gret) #appearance time
     
     #filter series of datapoints that are too short or with high deviation
-    mc_filtered = filter_dots(mc_data)
-    at_filtered = filter_dots(at_data)
+    mc_filtered = filter_lines(mc_data)
+    at_filtered = filter_lines(at_data)
     
     #extract times and diameters
     time_mc = [[seg[0] for seg in mc_segment] for mc_segment in mc_filtered]
@@ -865,7 +842,6 @@ def plot_PSD(dataframe,show_mae,mtd,a,gret):
     plt.plot(xyz_appear[0], xyz_appear[1], '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6,label='appearance time')
     
     #initialize gr calculation
-    xyz_maxcon, xyz_appear, *others = init_methods(df,mpd=maximum_peak_difference,threshold_deriv=derivative_threshold)
     time_mc, diam_mc, time_at, diam_at = init_find(mtd,a,gret)
     
     #growth rates (and maes)
