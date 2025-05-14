@@ -1,45 +1,13 @@
-from modefitting_GR import ax, df1_selected
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from datetime import timedelta
 from scipy.optimize import curve_fit
-from matplotlib import use
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from operator import itemgetter
 import statsmodels.api as sm
 from sklearn import linear_model
-from warnings import simplefilter
-from scipy.optimize import OptimizeWarning
-from time import time
 
-#supressing warnings for curve_fit to avoid crowding of terminal!!
-simplefilter("ignore",OptimizeWarning) 
-simplefilter("ignore",RuntimeWarning)
-
-#backend changes the interface of plotting
-use("Qt5Agg") 
-
-## parameters ##
-#find_peak_areas
-maximum_peak_difference = 2 #hours (time between two peaks in smoothed data (window 3))
-derivative_threshold = 200 #cm^(-3)/h (starting points of horizontal peak areas, determines what is a high concentration) (NOTICE: concentration diff is half of this between timesteps as the resolution is 30min)
-
-#find_dots
-show_mae = False #show mae values of lines instead of growth rates, unit hours
-maximum_time_difference_dots = 2.5 #hours (between current and nearby point)
-mae_threshold_factor = 2 #a*x^(-1) (constant a that determines mean average error thresholds for different line lengths)
-gr_precentage_error_threshold = 50 #% (precentage error of growth rates when adding new points to gr lines)
-
-#channel plotting
-init_plot_channel = False #True to plot channels
-channel_indices = [5] #Indices of diameter channels, 1=small
-show_start_times_and_maxima = True #True to show all possible start times of peak areas (black arrow) and maximas associated
-
-################## LOADING DATA ###################
-
-df = df1_selected
 
 #################### FUNCTIONS #####################
 #useful functions
@@ -126,7 +94,7 @@ def linear(x,k,b):
 
 #################### METHODS #######################
 
-def find_peak_areas(dataframe,df_deriv,mpd,threshold_deriv):
+def find_peak_areas(dataframe,df_deriv,mpd,derivative_threshold):
     '''
     Finds peak areas with derivative threshold.
     Takes a dataframe with concentrations and time (UTC), 
@@ -142,7 +110,7 @@ def find_peak_areas(dataframe,df_deriv,mpd,threshold_deriv):
     maxima_list = []
 
     #define a boolean dataframe where the derivative threshold has been surpassed
-    df_surpassed = df_deriv > threshold_deriv
+    df_surpassed = df_deriv > derivative_threshold
 
     #find start points and shift them one timestamp earlier
     df_start_points = df_surpassed & (~df_surpassed.shift(1,fill_value=False)) 
@@ -274,8 +242,8 @@ def find_peak_areas(dataframe,df_deriv,mpd,threshold_deriv):
                 df_peak_areas = pd.concat([df_peak_areas,new_row],ignore_index=True)
                     
     df_peak_areas.to_csv('./find_peak_areas.csv', sep=',', header=True, index=True, na_rep='nan')
-    return df_peak_areas, threshold_deriv, start_times_list, maxima_list
-def maximum_concentration(df_peak_areas): 
+    return df_peak_areas, derivative_threshold, start_times_list, maxima_list
+def maximum_concentration(df,df_peak_areas): 
     '''
     Calculates the maximum concentration.
     Takes in dataframe from wanted area in the PSD.
@@ -349,7 +317,7 @@ def maximum_concentration(df_peak_areas):
     max_conc_time = np.array(max_conc_time)
     
     return max_conc_time, max_conc_diameter, max_conc, fitting_params, area_edges
-def appearance_time(df_peak_areas):
+def appearance_time(df,df_peak_areas):
     '''
     Calculates the appearance times.
     Takes in dataframe from wanted area in the PSD.
@@ -446,7 +414,7 @@ def appearance_time(df_peak_areas):
     appear_time = np.array(appear_time)
 
     return appear_time, appear_diameter, mid_conc, fitting_params, area_edges
-def init_methods(dataframe,mpd,threshold_deriv):
+def init_methods(df,mpd,derivative_threshold):
     '''
     Goes through all ranges and calculates the points for maximum concentration
     and appearance time methods along with other useful information.
@@ -455,23 +423,20 @@ def init_methods(dataframe,mpd,threshold_deriv):
     maxcon_xyz = [] #maximum concentration
     appear_xyz = [] #appearance time
 
-    start_time = time()
     #smoothen data, calculate derivative and define peak areas
-    df_filtered = average_filter(dataframe,window=3)
+    df_filtered = average_filter(df,window=3)
     df_deriv = cal_derivative(df_filtered) 
-    df_peak_areas, threshold_deriv, start_times_list, maxima_list = find_peak_areas(df_filtered,df_deriv,mpd,threshold_deriv)
+    df_peak_areas, derivative_threshold, start_times_list, maxima_list = find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold)
     
     #methods
-    mc_x, mc_y, mc_z, mc_params, peak_area_edges_gaus = maximum_concentration(df_peak_areas)
-    at_x, at_y, at_z, at_params, peak_area_edges_logi = appearance_time(df_peak_areas)
-    print("Fitting done! (2/4) "+"(%s seconds)" % (time() - start_time))
+    mc_x, mc_y, mc_z, mc_params, peak_area_edges_gaus = maximum_concentration(df,df_peak_areas)
+    at_x, at_y, at_z, at_params, peak_area_edges_logi = appearance_time(df,df_peak_areas)
     
     #combine to same lists
     maxcon_xyz = [mc_x,mc_y,mc_z]
     appear_xyz = [at_x,at_y,at_z]
     
-    return maxcon_xyz, appear_xyz, mc_params, at_params, peak_area_edges_gaus, peak_area_edges_logi, threshold_deriv, start_times_list, maxima_list
-xyz_maxcon, xyz_appear, *others = init_methods(df,mpd=maximum_peak_difference,threshold_deriv=derivative_threshold)
+    return maxcon_xyz, appear_xyz, mc_params, at_params, peak_area_edges_gaus, peak_area_edges_logi, derivative_threshold, start_times_list, maxima_list
 
 ################## GROWTH RATES ####################
 
@@ -488,7 +453,7 @@ def extract_data(line,exclude_start=0,exclude_end=0):
     return ([point[1] for point in line[exclude_start:len(line)-exclude_end]],  #x values
             [point[0] for point in line[exclude_start:len(line)-exclude_end]])  #y values
     
-def find_growth(times,diams,mtd,a,gret):
+def find_growth(df,times,diams,mtd,a,gret):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
@@ -578,7 +543,6 @@ def find_growth(times,diams,mtd,a,gret):
                     #find index of that line
                     for line in unfinished_lines:
                         if datapoint in line:
-                            print(line)
                             line.append(nearby_datapoint)
                             break
                 
@@ -708,82 +672,19 @@ def filter_lines(lines):
     #???
 
     return filtered_lines  
-def init_find(mtd,a,gret):
-    start_time = time()
+def init_find(df,xyz_maxcon,xyz_appear,mtd,a,gret):
     #find consequtive datapoints
-    mc_data = find_growth(times=xyz_maxcon[0],diams=xyz_maxcon[1],mtd=mtd,a=a,gret=gret) #maximum concentration
-    at_data = find_growth(times=xyz_appear[0],diams=xyz_appear[1],mtd=mtd,a=a,gret=gret) #appearance time
+    mc_data = find_growth(df,times=xyz_maxcon[0],diams=xyz_maxcon[1],mtd=mtd,a=a,gret=gret) #maximum concentration
+    at_data = find_growth(df,times=xyz_appear[0],diams=xyz_appear[1],mtd=mtd,a=a,gret=gret) #appearance time
     
     #filter series of datapoints that are too short or with high deviation
     mc_filtered = filter_lines(mc_data)
     at_filtered = filter_lines(at_data)
     
-    #extract times and diameters
-    time_mc = [[seg[0] for seg in mc_segment] for mc_segment in mc_filtered]
-    diam_mc = [[seg[1] for seg in mc_segment] for mc_segment in mc_filtered]
-    time_at = [[seg[0] for seg in at_segment] for at_segment in at_filtered]
-    diam_at = [[seg[1] for seg in at_segment] for at_segment in at_filtered]
-    print("Dots found! (3/4) "+"(%s seconds)" % (time() - start_time))
-    
-    return time_mc, diam_mc, time_at, diam_at
+    return mc_filtered, at_filtered 
     
 #################### PLOTTING ######################
 
-def robust_fit(time,diam,color,show_mae):
-    """
-    Args:
-        time (_type_): _description_
-        diam (_type_): _description_
-        
-    Robust linear model with statsmodel package.
-    Used the HuberT weighting function in iterative 
-    robust estimation.
-
-    """
-    #do fit to linear data
-    #diam_log = np.geomspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
-    diam_linear = np.linspace(min(diam), max(diam),num=len(time))[:, np.newaxis]
-
-    #linear fit for comparison
-    #lr = linear_model.LinearRegression().fit(diam, time) #x,y
-
-    #robust fit
-    rlm_HuberT = sm.RLM(time, sm.add_constant(diam), M=sm.robust.norms.HuberT()) #statsmodel robust linear model
-    rlm_results = rlm_HuberT.fit()
-    
-    #predict data of estimated models
-    t_rlm = rlm_results.predict(sm.add_constant(diam_linear))
-    t_params = rlm_results.params
-
-    if len(t_params) > 1: #sometimes lines with datapoints that all have the same diameter, REMOVE WHEN FILTERING IS FIXED
-        #change days to UTC
-        time_UTC_rlm = [dt.replace(tzinfo=None) for dt in mdates.num2date(t_rlm)]
-
-        #growth rate annotation
-        gr = 1/(t_params[1]*24) #unit to nm/h from time in days
-        
-        plt.plot(time_UTC_rlm, diam_linear,color=color,linewidth=2)
-            
-        midpoint_idx = len(diam_linear) // 2 #growth rate value
-        midpoint_time = time_UTC_rlm[midpoint_idx]
-        midpoint_value = diam[midpoint_idx]
-        
-        if show_mae:
-            #mae annotation
-            y = np.array(time)
-            y_predicted = np.array(t_rlm)
-            mae = np.mean(np.abs(y_predicted - y)) * 24
-            plt.annotate(f'{mae:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-            ax.set_title(f'mean absolute error (MAE) unit: [hours]', loc='right', fontsize=8) 
-        else:
-            #growth rate annotation
-            plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-            ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
-
-        
-        #print("Statsmodel robus linear model results: \n",rlm_results.summary())
-        #print("\nparameters: ",rlm_results.params)
-        #print(help(sm.RLM.fit))
 def linear_fit(time,diam,color,show_mae):
     '''
     y = time in days
@@ -807,65 +708,12 @@ def linear_fit(time,diam,color,show_mae):
     midpoint_time = time_UTC[midpoint_idx]
     midpoint_value = diam[midpoint_idx]
 
-    if show_mae:
-        #mape annotation
-        y = np.array(time)
-        y_predicted = np.array(time_fit)
-        mae = np.mean(np.abs(y_predicted - y)) * 24
-        
-        plt.annotate(f'{mae:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-        ax.set_title(f'mean absolute error (MAE) unit: [hours]', loc='right', fontsize=8) 
-    else:
-        #growth rate annotation
-        plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-        ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
 
-def plot_PSD(dataframe,show_mae,mtd,a,gret):
-    '''
-    Plots dots for maximum concentration and 
-    appearance time methods.
-    Additionally does adjustments to PSD.
-    '''
-    st = time()
-    #plot line when day changes
-    new_day = None
-    for i in dataframe.index:
-        day = i.strftime("%d")  
-        if day != new_day:
-            i = i - timedelta(minutes=15) #shift back 15mins due to resolution change
-            plt.axvline(x=i, color='black', linestyle='-', lw=1)
-        new_day = day
-    #fig, ax1 = plt.subplots(figsize=(9, 4.7))
-    
-    #dots
-    plt.plot(xyz_maxcon[0], xyz_maxcon[1], '.', alpha=0.8, color='white',mec='black',mew=0.4, ms=6,label='maximum concentration') 
-    plt.plot(xyz_appear[0], xyz_appear[1], '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6,label='appearance time')
-    
-    #initialize gr calculation
-    time_mc, diam_mc, time_at, diam_at = init_find(mtd,a,gret)
-    
-    #growth rates (and maes)
-    for time_seg_mc, diam_seg_mc, time_seg_at, diam_seg_at in zip(time_mc,diam_mc,time_at,diam_at):
-        linear_fit(time_seg_mc, diam_seg_mc,"white",show_mae) #maximum concentration
-        linear_fit(time_seg_at, diam_seg_at,"green",show_mae) #appearance time
-        #robust_fit(time_seg_mc, diam_seg_mc,"white",show_mae)
-        #robust_fit(time_seg_at, diam_seg_at,"green",show_mae)
+    #growth rate annotation
+    plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
+    #ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
 
-    #adjustments to plot
-    plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
-    for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
-        legend_handle.set_markeredgewidth(0.5)
-        legend_handle.set_markeredgecolor("black")
-    
-    plt.xlim(dataframe.index[0],dataframe.index[-1])
-    plt.ylim(dataframe.columns[0],dataframe.columns[-1])
-    plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
-    plt.xlabel("time",fontsize=14) #add y-axis label
-    
-    print("Plotting done! (4/4) "+"(%s seconds)" % (time() - st))
-plot_PSD(df,show_mae,maximum_time_difference_dots,mae_threshold_factor,gr_precentage_error_threshold)
-
-def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_and_maxima):
+def plot_channel(df,diameter_list_i,mpd,threshold_deriv,show_start_times_and_maxima):
     '''
     Plots chosen diameter channels over UTC time, with thresholds and gaussian fit.
     ax[0,0] = whole channel over time, with ranges      ax[0,1] = derivative of concentrations
@@ -879,7 +727,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
     '''1 assemble all datasets'''
     xyz_maxcon, xyz_appear, fitting_parameters_gaus, \
         fitting_parameters_logi, mode_edges_gaussian, mode_edges_logistic, \
-        threshold_deriv, start_times_list, maxima_list = init_methods(dataframe,mpd,threshold_deriv)
+        threshold_deriv, start_times_list, maxima_list = init_methods(df,mpd,threshold_deriv)
 
     '''2 define lists and their shapes'''
     xy_maxcon =  []             #[(max con diameter, max con time (UTC), max con), ...]
@@ -920,11 +768,11 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
     
     #parameters
     #define x and y for the whole channel
-    x = dataframe.index #time
-    y_list = [dataframe[diam] for diam in diameter_list] #concentrations
+    x = df.index #time
+    y_list = [df[diam] for diam in diameter_list] #concentrations
     
     #also smoothed concentrations
-    df_filtered = average_filter(dataframe,window=3)
+    df_filtered = average_filter(df,window=3)
     x_smooth = df_filtered.index #times
     y_smooth = [df_filtered[diam] for diam in diameter_list] #concentrations
 
@@ -996,9 +844,9 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
             diam_params, a, mu, sigma = params
             diam_gaus, start_time, end_time = edges 
             
-            mode_times_UTC = dataframe.loc[start_time:end_time,diam].index
+            mode_times_UTC = df.loc[start_time:end_time,diam].index
             mode_times = mdates.date2num(mode_times_UTC) #time to days
-            mode_concs = dataframe.loc[start_time:end_time,diam].values
+            mode_concs = df.loc[start_time:end_time,diam].values
             
             if diam_params == diameter_list[row_num] and diam_gaus == diameter_list[row_num]: #check that plotting happens in the right channel
                 line2, = ax1[row_num,0].plot(mode_times_UTC, gaussian(mode_times,a,mu,sigma)+min(mode_concs), '--', color="mediumturquoise",lw=1.2)
@@ -1010,7 +858,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
             diam_params, y_min, L, x0, k = params
             diam_logi, start_time_logi, end_time_logi = edges_logi
 
-            mode_times_UTC = dataframe.loc[start_time_logi:end_time_logi,diam].index
+            mode_times_UTC = df.loc[start_time_logi:end_time_logi,diam].index
             mode_times = mdates.date2num(mode_times_UTC) #time to days
      
             if diam_params == diameter_list[row_num] and diam_logi == diameter_list[row_num]:
@@ -1034,7 +882,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
                 lines_and_labels.add((line5,"appearance time"))
                 #ax2.plot(time, conc, '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6)
         
-        ax1[row_num,0].set_xlim(dataframe.index[0],dataframe.index[-1])
+        ax1[row_num,0].set_xlim(df.index[0],df.index[-1])
         ax1[row_num,0].set_facecolor("lightgray")
         #ax1[row_num,0].xaxis.set_tick_params(rotation=30)
         ax1[row_num,0].ticklabel_format(axis="y",style="sci",scilimits=(0,0))
@@ -1044,7 +892,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
 
 
     #PLOTS ON THE RIGHT
-    df_1st_derivatives = cal_derivative(dataframe)
+    df_1st_derivatives = cal_derivative(df)
 
     x = df_1st_derivatives.index #time
     y_list = [df_1st_derivatives[diam] for diam in diameter_list] #concentrations
@@ -1090,7 +938,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
 
 
         
-        ax1[row_num,1].set_xlim(dataframe.index[1],dataframe.index[-1])
+        ax1[row_num,1].set_xlim(df.index[1],df.index[-1])
         ax1[row_num,1].set_ylim(-50,threshold_deriv*1.8)
         ax1[row_num,1].set_facecolor("lightgray")
         #ax1[row_num,1].xaxis.set_tick_params(rotation=30) #rotating x-axis labels
@@ -1143,7 +991,7 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
 
     #plot line when day changes
     new_day = None
-    for i in dataframe.index:
+    for i in df.index:
         day = i.strftime("%d")  
         if day != new_day:
             i = i - timedelta(minutes=15) #shift back 15mins due to resolution change
@@ -1154,9 +1002,3 @@ def plot_channel(dataframe,diameter_list_i,mpd,threshold_deriv,show_start_times_
     
     #fig.tight_layout()
     print("Drawing diameter channel(s):",diameter_list)
-
-if init_plot_channel:
-    plot_channel(df,diameter_list_i=channel_indices,mpd=maximum_peak_difference,threshold_deriv=derivative_threshold,show_start_times_and_maxima=show_start_times_and_maxima)
-
-plt.show()
-####################################################

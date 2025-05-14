@@ -1,96 +1,10 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
-from matplotlib import colors
-import matplotlib ###
-matplotlib.use("Qt5Agg") ###backend changes the plotting style
 from datetime import timedelta
-from datetime import datetime
-from scipy.optimize import curve_fit, OptimizeWarning 
-import warnings
-from scipy import stats
-from os import listdir ###
-import json ###
-from operator import itemgetter ###
-import time ###
-import matplotlib.dates as mdates ###
+from scipy.optimize import curve_fit
+from operator import itemgetter
+import time
 
-#choose dates
-start_date = "2016-04-10"
-end_date = "2016-04-12"
-
-## parameters ##
-show_mape = False #show mape values of lines instead of growth rates, unit %
-mape_threshold_factor = 15 #a*x^(-1) (constant a that determines mean average error thresholds for different line lengths)
-gr_error_threshold = 60 #% (precentage error of growth rates when adding new points to gr lines)
-
-###################################################################
-
-#load data and convert time columns to timestamps
-df1 = pd.DataFrame(pd.read_csv('smeardata_20250506.csv',sep=',',engine='python'))
-df1['timestamp'] = pd.to_datetime(df1[['Year', 'Month', 'Day', 'Hour', 'Minute', 'Second']])
-df1 = df1.set_index('timestamp')
-df1 = df1.drop(['Year','Month','Day','Hour','Minute','Second'], axis=1)
-
-#drop bins with no data
-df1 = df1.dropna(axis=1, how='all')
-
-#select wanted time period and shift times by 15minutes forward
-df1_selected = df1.loc[start_date:end_date].shift(periods=15, freq='Min')
-
-#put diameter bins in order
-sorted_columns = sorted(df1_selected.columns, key=lambda column: (int(column.split('e')[-1]) , int(column[10:13])))
-df1_selected = df1_selected[sorted_columns]
-
-#replace arbitrary column names by diameter float values
-diameter_ints = []
-for column_str in sorted_columns:
-    number = column_str[10:13]
-    decimal_pos = int(column_str[-1])
-    column_float = float(number[:decimal_pos] + '.' + number[decimal_pos:])
-    diameter_ints.append(column_float)
-diameter_ints[-1] = 1000.0 #set last bin as 1000
-df1_selected.columns = diameter_ints
-
-#with this we can check the format
-df1_selected.to_csv('./combined_data.csv', sep=',', header=True, index=True, na_rep='nan')
-
-#set epoch
-matplotlib.dates.set_epoch(start_date)
-
-##############################################################
-###LOADING A JSON FILE
-
-with open("fit_results.json") as file:
-    mode_fits = json.load(file)
-
-#processing modefitting data
-#making a dataframe from json file
-rows_list = []
-for timestamp in mode_fits:
-    ts = timestamp['time']
-    peak_diams = timestamp['peak_diams']
-    
-    for i, gaussians in enumerate(timestamp['gaussians']):
-        mean = gaussians['mean']
-        sigma = gaussians['sigma']
-        amplitude = gaussians['amplitude']
-
-        dict_row = {'timestamp':ts,'amplitude':amplitude,'peak_diameter':peak_diams[i],'sigma':sigma} #diam unit m to nm
-        rows_list.append(dict_row)
-
-df_modefits = pd.DataFrame(rows_list)  
-
-#timestamps to index, timestamp strings to datetime objects
-df_modefits['timestamp']=pd.to_datetime(df_modefits['timestamp'], format="%Y-%m-%d %H:%M:%S")
-df_modefits.index=df_modefits['timestamp']
-df_modefits = df_modefits.drop(['timestamp'], axis=1)
-
-#print('df_modefits',df_modefits) ###
-
-##################################################
-
-###
 def timestamp_indexing(timestamps):
     '''
     Creates list of indices corresponding to given timestamp list.
@@ -134,7 +48,6 @@ def points_in_existing_line(unfinished_lines, point, nearby_point=None):
 def extract_data(line,exclude_start=0,exclude_end=0):
     return (timestamp_indexing([point[0] for point in line[exclude_start:len(line)-exclude_end]]),  #x values
             [point[1] for point in line[exclude_start:len(line)-exclude_end]])  #y values
-###
 
 def find_growth(df,a,gr_error_threshold):
     '''
@@ -331,7 +244,6 @@ def find_growth(df,a,gr_error_threshold):
     df_mapes.to_csv('./df_mapes_modefitting.csv', sep=',', header=True, index=True, na_rep='nan')
     
     return finalized_lines
-
 def filter_lines(combined):
     '''
     Filter datapoints of lines that are too short or
@@ -345,78 +257,12 @@ def filter_lines(combined):
     #???
     
     return filtered_lines
-
-def process_data(df,a,gr_error_threshold):
+def cal_modefit_growth(df,a,gret):
     start_time = time.time()
-    growth_lines = find_growth(df,a=a,gr_error_threshold=gr_error_threshold)
-    print("--- %s seconds ---" % (time.time() - start_time))
+    growth_lines = find_growth(df,a=a,gr_error_threshold=gret)
     print('Periods of growth found! (1/2)')
     filtered_lines = filter_lines(growth_lines)
     print('Filtering done! (2/2)')    
  
     return filtered_lines
-print('\n'+'*********** Processing mode fitting data'+'\n')
-filter_segs = process_data(df_modefits,mape_threshold_factor,gr_error_threshold) #data from Janne's code
-###
-
-###############################################################################
-
-def plot2_ver2(filter_segs,show_mape):
-    fig, ax = plt.subplots(figsize=(14, 5), dpi=200) ### figsize=(12, 3), dpi=300 -> figsize=(12, 5), dpi=200
-
-    #colormap
-    x = df1_selected.index[0:]
-    y = df1_selected.columns.astype(float)
-    plt.pcolormesh(x, y, df1_selected[0:].T, cmap='RdYlBu_r', zorder=0, norm=colors.LogNorm(vmin=1e1, vmax=1e4))
-    ax.set_yscale('log')
-    cbar = plt.colorbar(orientation='vertical', shrink=0.8, extend="max", pad=0.04)
-    cbar.set_label('dN/dlogDp', size=14)
-    cbar.ax.tick_params(labelsize=12)
-    
-    #modefit points (as black stars)
-    time = df_modefits.index
-    diam = df_modefits['peak_diameter']
-    plt.plot(time,diam,'.', alpha=0.8, color='black', mec='black', mew=0.4, ms=6, label='mode fitting')
-    
-    #growth rates
-    '''
-    y = time in days
-    x = diameters in nm
-    Flipped as the error is in time.
-    '''    
-    #linear least square fits
-    time = [[seg[0] for seg in segment] for segment in filter_segs]
-    diam = [[seg[1] for seg in segment] for segment in filter_segs]
-    
-    df_GR_final = pd.DataFrame(columns=['start','end','d_initial','d_final','GR'])
-    for i in range(len(time)):
-        x = timestamp_indexing(time[i]) #time
-        params, pcov = curve_fit(linear, x, diam[i])
-        gr = params[0]*2 #unit to nm/h from nm/0.5h (due to how x is defined)
-        diam_fit = params[0]*x + params[1]
-        plt.plot(time[i],diam_fit,lw=2) #line
-        
-        midpoint_idx = len(time[i]) // 2 #growth rate value
-        midpoint_time = time[i][midpoint_idx]
-        midpoint_value = diam_fit[midpoint_idx]
-
-        if show_mape:
-            #mape annotation
-            y = np.array(diam[i])
-            y_predicted = np.array(diam_fit)
-            absolute_error = np.abs(y_predicted - y)
-            mape = np.mean(absolute_error / y) * 100
-            
-            plt.annotate(f'{mape:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7, fontweight='bold')
-        else:
-            plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7, fontweight='bold')
-        
-        #save values to df for later use
-        df_GR_final.loc[i] = [time[i][0],time[i][-1],diam[i][0],diam[i][-1],gr]
-    
-    return ax, df_GR_final
-
-#ax = plot2(df_GR_final) ### 
-ax, df_GR_final = plot2_ver2(filter_segs,show_mape=show_mape) ### 
-df_GR_final.to_csv('./Gr_final.csv', sep=',', header=True, index=True, na_rep='nan')
 
