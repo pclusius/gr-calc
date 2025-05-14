@@ -132,10 +132,7 @@ def find_peak_areas(dataframe,df_deriv,mpd,derivative_threshold):
         end_time = None
         
         #save for use in channel plotting
-        start_concs = []
-        for start_time in start_times:
-            start_conc = dataframe.loc[start_time,diam]
-            start_concs.append(start_conc)
+        start_concs = [dataframe.loc[start_time,diam] for start_time in start_times]
         start_times_list.append((diam,start_times,start_concs)) 
         
         #loop through start times
@@ -148,7 +145,7 @@ def find_peak_areas(dataframe,df_deriv,mpd,derivative_threshold):
             
             #find end time after local maximum concentration 
             try:
-                subset_end = start_time + timedelta(hours=10) #10 hours ahead
+                subset_end = start_time + timedelta(hours=15) #15 hours ahead
             except IndexError:
                 subset_end = dataframe.index[-1]  
                 
@@ -185,11 +182,8 @@ def find_peak_areas(dataframe,df_deriv,mpd,derivative_threshold):
             df_subset_only_maxima = df_subset_maxima[df_subset_maxima.values].copy()
 
             #save for use in channel plotting
-            maximum_concs = []
             maxima_times = df_subset_only_maxima.index
-            for max_time in maxima_times:
-                max_conc = dataframe.loc[max_time,diam]
-                maximum_concs.append(max_conc)
+            maximum_concs = [dataframe.loc[max_time,diam] for max_time in maxima_times]  
             maxima_list.append((diam,maxima_times,maximum_concs)) 
 
             #choose closest maximum after start time
@@ -208,7 +202,7 @@ def find_peak_areas(dataframe,df_deriv,mpd,derivative_threshold):
             max_conc_time = df_subset.index[df_subset == closest_maximum].tolist()[0] #rough estimate of maximum concentration time 
             max_conc_time_i = dataframe.index.get_loc(max_conc_time) #index of max_conc_time
             
-            #define subset from this time to end
+            #define subset from maximum concentration time to end
             df_subset_maxcon = dataframe.loc[max_conc_time:subset_end,diam] 
             
             #iterate over concentrations after maximum to find ending time
@@ -216,8 +210,8 @@ def find_peak_areas(dataframe,df_deriv,mpd,derivative_threshold):
 
                 #check for another maximum along the way
                 if i != 0 and df_subset_maxima.loc[time]:
-                    step_before_other_peak = df_subset_maxcon.index[i-1]
-                    end_conc = min(df_subset_maxcon.loc[max_conc_time:step_before_other_peak]) #end point after peak
+                    timestep_before_next_peak = df_subset_maxcon.index[i-1]
+                    end_conc = min(df_subset_maxcon.loc[max_conc_time:timestep_before_next_peak]) #end point after peak
                     end_time = df_subset_maxcon.index[df_subset_maxcon.values == end_conc][0] #end time found!
                     break
  
@@ -659,7 +653,6 @@ def find_growth(df,times,diams,mtd,a,gret):
     df_maes.to_csv('./df_maes.csv', sep=',', header=True, index=True, na_rep='nan')
     
     return finalized_lines
-
 def filter_lines(lines):
     '''
     Filter datapoints of lines that are too short or
@@ -716,12 +709,6 @@ def linear_fit(time,diam,color,show_mae):
 def plot_channel(df,diameter_list_i,mpd,threshold_deriv,show_start_times_and_maxima):
     '''
     Plots chosen diameter channels over UTC time, with thresholds and gaussian fit.
-    ax[0,0] = whole channel over time, with ranges      ax[0,1] = derivative of concentrations
-    ax[n,0] = n amount of channels                      ax[n,1] = derivative of concentrations
-                                                ...
-    Inputs dataframe with data and diameters (numerical).
-    
-    start_times = [(diameter, [start time 1, start time 2...], ...)]
     '''   
     
     '''1 assemble all datasets'''
@@ -799,18 +786,19 @@ def plot_channel(df,diameter_list_i,mpd,threshold_deriv,show_start_times_and_max
             
         #all possible start times of modes
         if show_start_times_and_maxima:
-            for start, maximum in zip(start_times_list,maxima_list):
+            
+            for start in start_times_list: #start points
                 start_diam, start_times, start_concs = start
-                max_diam, max_times, max_concs = maximum
                 
                 if start_diam == diameter_list[row_num]:
-                    #start points
                     #ax1[row_num,0].vlines(x=start_times,ymin=0,ymax=100, color='black', linestyle='-', lw=0.8)
                     starts = ax1[row_num,0].scatter(start_times, start_concs, s=5, c='black',marker='>', alpha=0.6, zorder=10)
                     lines_and_labels.add((starts,"possible peak area starting points"))
-                        
+            
+            for maximum in maxima_list: #maximas
+                max_diam, max_times, max_concs = maximum
+                
                 if max_diam == diameter_list[row_num]:  
-                    #maximas
                     #ax1[row_num,0].vlines(x=start_times,ymin=0,ymax=100, color='black', linestyle='-', lw=0.8)
                     maxs = ax1[row_num,0].scatter(max_times, max_concs, s=5, c='black',marker='.', alpha=0.6, zorder=10)
                     lines_and_labels.add((maxs,"possible peak area maxima"))
