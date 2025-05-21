@@ -443,6 +443,16 @@ def points_in_existing_line(unfinished_lines, point, nearby_point=None):
         if any(point in line for line in unfinished_lines) or any(nearby_point in line for line in unfinished_lines):
             score = True
     return score
+def point_in_existing_line(unfinished_lines, point):
+    score = False
+    if any(point in line for line in unfinished_lines):
+        score = True
+    return score
+def both_points_in_existing_lines(unfinished_lines, point, nearby_point):
+    score = False
+    if any(point in line for line in unfinished_lines) and any(nearby_point in line for line in unfinished_lines):
+        score = True
+    return score
 def extract_data(line,exclude_start=0,exclude_end=0):
     return ([point[1] for point in line[exclude_start:len(line)-exclude_end]],  #x values
             [point[0] for point in line[exclude_start:len(line)-exclude_end]])  #y values
@@ -475,7 +485,10 @@ def find_growth(df,times,diams,mtd,a,gret):
         
         #iterate over diameter channels after current datapoint and look for the nearest datapoint
         for ii in range(1,3): #allows one channel in between
-            diam_channel = df.columns.values[df.columns.values >= diam0][ii] #diam in current bin
+            try:
+                diam_channel = df.columns.values[df.columns.values >= diam0][ii] #diam in current bin
+            except IndexError:
+                break #reached diameter of 1000nm
             diam_diff = diam_channel-diam0
             channel_points = [point for point in data_sorted if point[1] == diam_channel]
             
@@ -508,9 +521,13 @@ def find_growth(df,times,diams,mtd,a,gret):
                         
                         min_time = min(mdates.date2num(df.index))
                         b = 1.5/24 #1.5 hours
-                        low_time_limit = 1/(abs(GR) * 1.5) * diam_diff - b + time0 #days
-                        high_time_limit = 1.5/abs(GR) * diam_diff + b + time0
-                        
+                        if GR >= 0:
+                            low_time_limit = 1/(GR * 1.5) * diam_diff - b + time0 #days
+                            high_time_limit = 1.5/GR * diam_diff + b + time0
+                        else:
+                            low_time_limit = 1.5/GR * diam_diff - b + time0 #days
+                            high_time_limit = 1/(GR * 1.5) * diam_diff + b + time0
+                    
                         #minimize MAE when choosing the new point
                         maes = []
                         for point in closest_channel_points:
@@ -591,15 +608,11 @@ def find_growth(df,times,diams,mtd,a,gret):
                     else:
                         unfinished_lines[iii] = current_line[1:] #another chance for shorter lines
                 
-                elif len(current_line) > 3 and gr_abs_precentage_error > gr_error_threshold:
+                elif len(current_line) >= 5 and gr_abs_precentage_error > gr_error_threshold: #only after 5 or more datapoints
                     #remove last point if threshold is exceeded
-                    if len(current_line) > 4:
-                        #delete line with recently added datapoint from unfinished lines
-                        unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
-                        finalized_lines.append(current_line[:-1])
-                        unfinished_lines.append([datapoint,nearby_datapoint])
-                    else:
-                        unfinished_lines[iii] = current_line[1:]
+                    unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
+                    finalized_lines.append(current_line[:-1])
+                    unfinished_lines.append([datapoint,nearby_datapoint])
 
                 break
             else: #keep looking for next datapoint until end of points if the next one isnt suitable
@@ -659,7 +672,7 @@ def filter_lines(lines):
     with too big of an error.
     '''
     #check length of datapoints for each line
-    filtered_lines = [line for line in lines if len(line) >= 4] #length of at least 4 datapoints
+    filtered_lines = [line for line in lines if len(line) >= 3] #length of at least 3 datapoints
     
     #filter lines with too high of a growth rate
     #???
