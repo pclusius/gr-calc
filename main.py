@@ -1,5 +1,5 @@
-#created: 9.5.2025
-#author: Nesrine Bouhlal
+# created: 9.5.2025
+# author: Nesrine Bouhlal
 
 # automatic growth rate calculator #
 
@@ -8,7 +8,8 @@ import numpy as np
 from matplotlib import use, colors
 from matplotlib.dates import set_epoch, num2date, date2num
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit, OptimizeWarning
+from scipy.optimize import OptimizeWarning
+from sklearn.linear_model import RANSACRegressor
 from warnings import simplefilter
 from datetime import timedelta
 from time import time
@@ -19,14 +20,16 @@ assumptions:
 - datasets in json files (AVAA), separated by commas
 - time in days & diameters in X*e^Y format 
   (e.g. "HYY_DMPS.d112e2" where diameter is 11.2nm)
-- 
+
+abbreviations:
+MF = mode fitting, MC = maximum concentration, AT = appearance time
 '''
 
 def main():
     ## DATASET ##
     file_name = "smeardata_20250506.csv" #in the same folder as the code
-    start_date = "2016-04-10"
-    end_date = "2016-04-12"
+    start_date = "2018-07-10"
+    end_date = "2018-07-12"
     
     ## PARAMETERS ##
     # mode fitting #
@@ -35,19 +38,21 @@ def main():
     gr_error_threshold = 50 #% (precentage error of growth rates when adding new points to gr lines)
     
     # maximum concentration and appearance time #
-    #find_modes
+    #find_peak_areas
     maximum_peak_difference = 2 #hours (time between two peaks in smoothed data (window 3))
     derivative_threshold = 200 #cm^(-3)/h (starting points of horizontal peak areas, determines what is a high concentration) 
                                #(NOTICE: concentration diff is half of this between timesteps as the resolution is 30min)
 
-    #find_dots
+    #find_growth
     maximum_time_difference_dots = 2.5 #hours (between current and nearby point)
     mae_threshold_factor = 2 #a*x^(-1) (constant a that determines mean average error thresholds for different line lengths)
-    gr_precentage_error_threshold = 50 #% (precentage error of growth rates when adding new points to gr lines)
+    gr_precentage_error_threshold = 70 #% (precentage error of growth rates when adding new points to gr lines)
+    maximum_diameter_channel = 1000 #nm (highest diameter channel where growth lines are extended)
+    maximum_growth_start_channel = 1000 #nm (highest diameter channel where growth lines are allowed to start)
 
     #channel plotting
-    init_plot_channel = True #True to plot channels
-    channel_indices = [19] #Indices of diameter channels, 1=small
+    init_plot_channel = False #True to plot channels
+    channel_indices = [26,27,28] #Indices of diameter channels, 1=small
     show_start_times_and_maxima = True #True to show all possible start times of peak areas (black arrow) and maximas associated
     
     
@@ -70,26 +75,26 @@ def main():
     st = time() #progress 
     
     print('\n'+'******** Processing mode fitting data'+'\n')
-    df_modefit_peaks = modefitting_peaks.find_peaks(df,fit_multimodes)
+    df_MF_peaks = modefitting_peaks.find_peaks(df,fit_multimodes)
     print("Peaks found! (1/5) "+"(%s seconds)" % (time() - st))
     st = time()
     
-    modefit_gr_points = modefitting_GR.cal_modefit_growth(df_modefit_peaks,a=mape_threshold_factor,gret=gr_error_threshold)
+    MF_gr_points = modefitting_GR.cal_modefit_growth(df_MF_peaks,a=mape_threshold_factor,gret=gr_error_threshold)
     print("Growth periods found! (2/5) "+"(%s seconds)" % (time() - st))
     st = time()
     
     print('\n'+'******** Processing maximum concentration and appearance time data'+'\n')
-    maxcon_peaks, apptime_peaks, *_ = maxcon_appeartime.init_methods(df,mpd=maximum_peak_difference,derivative_threshold=derivative_threshold)
+    MC_xyz, AT_xyz, incomplete_MC_xyz, incomplete_AT_xyz, *_ = maxcon_appeartime.init_methods(df,mpd=maximum_peak_difference,derivative_threshold=derivative_threshold)
     print("Peaks found! (3/5) "+"(%s seconds)" % (time() - st))
     st = time()
     
-    maxcon_gr_points, apptime_gr_points = maxcon_appeartime.init_find(df,maxcon_peaks,apptime_peaks,mtd=maximum_time_difference_dots,a=mae_threshold_factor,gret=gr_precentage_error_threshold)
+    MC_gr_points, AT_gr_points = maxcon_appeartime.init_find(df,MC_xyz,AT_xyz,mtd=maximum_time_difference_dots,mdc=maximum_diameter_channel,mgsc=maximum_growth_start_channel,a=mae_threshold_factor,gret=gr_precentage_error_threshold)
     print("Growth periods found! (4/5) "+"(%s seconds)" % (time() - st))
     st = time()
 
     
     ## PLOTTING ##
-    plot_results(df,df_modefit_peaks,modefit_gr_points,maxcon_peaks,maxcon_gr_points,apptime_peaks,apptime_gr_points)
+    plot_results(df,df_MF_peaks,MF_gr_points,MC_xyz,incomplete_MC_xyz,MC_gr_points,AT_xyz,incomplete_AT_xyz,AT_gr_points,)
     if init_plot_channel:
         maxcon_appeartime.plot_channel(df,channel_indices,maximum_peak_difference,derivative_threshold,show_start_times_and_maxima)
     plt.show()
@@ -125,7 +130,7 @@ def load_data(file_name,start_date,end_date):
     diameter_ints[-1] = 1000.0 #set last bin as 1000
     df.columns = diameter_ints
     return df
-def plot_results(df_data,df_modefits,modefit_gr_points,maxcon_peaks,maxcon_gr_points,apptime_peaks,apptime_gr_points):
+def plot_results(df_data,df_MF_peaks,MF_gr_points,MC_xyz,incomplete_MC_xyz,MC_gr_points,AT_xyz,incomplete_AT_xyz,AT_gr_points):
     def robust_fit(x,y):
         """
         Robust linear regression using statsmodels with HuberT weighting.
@@ -150,6 +155,29 @@ def plot_results(df_data,df_modefits,modefit_gr_points,maxcon_peaks,maxcon_gr_po
         midpoint_idx = len(time) // 2 
         plt.annotate(f'{gr:.2f}', (time[midpoint_idx], diam[midpoint_idx]), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
         ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
+    def RANSAC(x,y):
+        X = np.array(x)  # Replace 'points' with your data
+        Y = np.array(y)
+
+        # Reshape for RANSAC
+        X = X.reshape(-1, 1)
+
+        # Initialize RANSAC
+        ransac = RANSACRegressor(residual_threshold=5.0)  # Adjust threshold based on data
+        ransac.fit(X, Y)
+
+        # Get inliers and outliers
+        inliers = ransac.inlier_mask_
+        outliers = ~ransac.inlier_mask_
+        
+        # parameters
+        params = ransac.estimator_.coef_
+
+        # Line Parameters
+        line_X = np.linspace(min(X), max(X), 100).reshape(-1, 1)
+        line_Y = ransac.predict(line_X)
+        
+        return line_X, line_Y, params
     
     fig, ax = plt.subplots(figsize=(14, 5), dpi=200) ### figsize=(12, 3), dpi=300 -> figsize=(12, 5), dpi=200
 
@@ -169,38 +197,46 @@ def plot_results(df_data,df_modefits,modefit_gr_points,maxcon_peaks,maxcon_gr_po
     
     #MODE FITTING
     #black points
-    plt.plot(df_modefits.index,df_modefits['peak_diameter'],'.', alpha=0.8, color='black', mec='black', mew=0.4, ms=6, label='mode fitting')
+    plt.plot(df_MF_peaks.index,df_MF_peaks['peak_diameter'],'.', alpha=0.8, color='black', mec='black', mew=0.4, ms=6, label='mode fitting')
 
     #growth rates
-    for line in modefit_gr_points:
+    for line in MF_gr_points:
         time, diam = zip(*line) #UTC, nm
-        time_fit, diam_fit, params = robust_fit(date2num(time), diam)
+        #time_fit, diam_fit, params = robust_fit(date2num(time), diam)
+        time_fit, diam_fit, params = RANSAC(date2num(time), diam)
         plt.plot(time_fit, diam_fit,lw=2) #line
 
         #growth rate annotation
-        gr = params[1]/24 #nm/h
+        gr = params[0]/24 #nm/h
         gr_annotation(gr,time,diam_fit)
     
     
     #MAXIMUM CONCENTRATION & APPEARANCE TIME
     #white and green points
-    plt.plot(maxcon_peaks[0], maxcon_peaks[1], '.', alpha=0.8, color='white',mec='black',mew=0.4, ms=6,label='maximum concentration') 
-    plt.plot(apptime_peaks[0], apptime_peaks[1], '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6,label='appearance time')
+    plt.plot(MC_xyz[0], MC_xyz[1], '.', alpha=0.8, color='white',mec='black',mew=0.4, ms=6,label='maximum concentration') 
+    plt.plot(AT_xyz[0], AT_xyz[1], '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6,label='appearance time')
     
     #growth rates
-    for points, color in [(maxcon_gr_points,"white"),(apptime_gr_points,"green")]:
+    for points, incomplete_points, color in [(MC_gr_points,incomplete_MC_xyz,"white"),(AT_gr_points,incomplete_AT_xyz,"green")]:
         for line in points:
             time, diam = zip(*line) #days, nm
             diam_fit, time_fit, params = robust_fit(diam, time)
             
             #change days to UTC and plot line
-            time_UTC = [dt.replace(tzinfo=None) for dt in num2date(time_fit)]
-            plt.plot(time_fit,diam_fit,color=color,lw=2)
+            time_UTC = [dt.replace(tzinfo=None) for dt in num2date(time)]
+            time_fit_UTC = [dt.replace(tzinfo=None) for dt in num2date(time_fit)]
             
             #growth rate annotation
             gr = 1/(params[1]*24) #nm/h
-            gr_annotation(gr,time_UTC,diam_fit)
-
+            gr_annotation(gr,time_fit_UTC,diam_fit)
+            
+            #plot poorly defined lines as dotted lines and well defined as full lines
+            for t in time_UTC:
+                if t in incomplete_points[0]:
+                    plt.plot(time_fit,diam_fit,ls="dashed",color=color,lw=1.5)
+                    break
+            else:
+                plt.plot(time_fit,diam_fit,color=color,lw=2) 
 
     #adjustments to plot
     plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
