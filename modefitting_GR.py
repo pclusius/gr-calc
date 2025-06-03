@@ -69,9 +69,7 @@ def find_growth(df_peaks,a,gret):
     unfinished_lines = []
     finalized_lines = []
     df_mapes = pd.DataFrame()
-    
-    max_time_diff = 60 #mins = 1h between current and nearby point, i.e. max one point missing
-    
+
     #iterate over each datapoint to find suitable pairs of mode fitting datapoints
     for i, datapoint in enumerate(data_sorted):
         time0, diam0 = datapoint
@@ -135,9 +133,9 @@ def find_growth(df_peaks,a,gret):
                         #print("GR",GR,"diam1", diam1,"time diff",time_diff,  low_diam_limit,high_diam_limit)
                         break
             
-            if i > 200 and i < 280:
-                print(time0)
-                print(unfinished_lines)
+            # if i > 200 and i < 280:
+            #     print(time0)
+            #     print(unfinished_lines)
                 
             
             
@@ -290,7 +288,7 @@ def filter_lines(combined):
     '''
     
     #filter lines shorter than 4
-    filtered_lines = [subpoints for subpoints in combined if len(subpoints) >= 3]
+    filtered_lines = [subpoints for subpoints in combined if len(subpoints) >= 4]
     
     #filter lines with too high of a growth rate
     #???

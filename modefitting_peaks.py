@@ -17,7 +17,7 @@ def find_peaks(df,fit_multimodes=False):
 
     #making a dataframe from json file
     rows_list = []
-    for timestamp in fits:
+    for timestamp in fits[0]:
         ts = timestamp['time']
         peak_diams = timestamp['peak_diams']
         
@@ -32,7 +32,11 @@ def find_peaks(df,fit_multimodes=False):
     df_fits = pd.DataFrame(rows_list)  
 
     #timestamps to index, timestamp strings to datetime objects
-    df_fits['timestamp']=pd.to_datetime(df_fits['timestamp'], format="%Y-%m-%d %H:%M:%S")
+    try:
+        df_fits['timestamp']=pd.to_datetime(df_fits['timestamp'], format="%Y-%m-%d %H:%M:%S")
+    except KeyError:
+        print("ERROR: Chosen time period does not exist in this dataset!")
+        raise SystemExit
     df_fits.index=df_fits['timestamp']
     df_modefits = df_fits.drop(['timestamp'], axis=1)
 
