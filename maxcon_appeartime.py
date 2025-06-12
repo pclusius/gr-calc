@@ -7,6 +7,7 @@ import matplotlib.dates as mdates
 from operator import itemgetter
 import statsmodels.api as sm
 from sklearn import linear_model
+import json
 
 
 #################### FUNCTIONS #####################
@@ -213,16 +214,12 @@ def find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold):
             
             #iterate over concentrations after maximum to find ending time
             for i, (time,conc) in enumerate(df_subset_maxcon.items()):
-                try:
-                    #check for another maximum along the way
-                    if i != 0 and df_subset_maxima.loc[time]:
-                        timestep_before_next_peak = df_subset_maxcon.index[i-1]
-                        end_conc = min(df_subset_maxcon.loc[max_conc_time:timestep_before_next_peak]) #end point after peak
-                        end_time = df_subset_maxcon.index[df_subset_maxcon.values == end_conc][0] #end time found!
-                        break
-                except ValueError:
-                    print("ERROR: Multiple identical timestamps detected! Please make sure the data has been sampled evenly.")
-                    raise SystemExit
+                #check for another maximum along the way
+                if i != 0 and df_subset_maxima.loc[time]:
+                    timestep_before_next_peak = df_subset_maxcon.index[i-1]
+                    end_conc = min(df_subset_maxcon.loc[max_conc_time:timestep_before_next_peak]) #end point after peak
+                    end_time = df_subset_maxcon.index[df_subset_maxcon.values == end_conc][0] #end time found!
+                    break
  
                 #check if concentration drops under the threshold
                 if conc < end_conc:
@@ -316,7 +313,7 @@ def maximum_concentration(df,df_peak_areas):
             #print("Diverges. Skipping.")
 
     return df_mc, fitting_params, area_edges
-def appearance_time(df,df_peak_areas):
+def appearance_time(df,mc_params,mc_area_edges):
     '''
     Calculates the appearance times.
     Takes in dataframe from wanted area in the PSD.
@@ -334,17 +331,10 @@ def appearance_time(df,df_peak_areas):
     fitting_params = []
     area_edges = []
     
-    #extract values from dataframe
-    area_values = df_peak_areas.values
-    start_times = area_values[:,0]
-    end_times = area_values[:,1]
-    area_diams = area_values[:,2]
-    
     #logistic fit to every horizontal area of growth
-    for i in range(len(start_times)):
-        start_time = start_times[i]
-        end_time = end_times[i]
-        diam = area_diams[i]
+    for mc_edge, mc_param in zip(mc_area_edges,mc_params):
+        diam, start_time, end_time = mc_edge
+        diam, a, mu, sigma = mc_param
         
         #find values from the dataframe
         subset = df.loc[start_time:end_time,diam]
@@ -357,59 +347,43 @@ def appearance_time(df,df_peak_areas):
         x = x - x_min
         y_min = np.min(y)
         y = y - y_min
+        mu = mu - x_min
         
-        #initial guess for parameters
-        mu=np.mean(x)
-        sigma = np.std(x)
-        a = np.max(y)
+        #limit x and y to values between start time of peak area and maximum concentration time in peak area
+        max_conc_time = mu
+        max_conc_index = closest(x, max_conc_time)
+        x_sliced = x[:max_conc_index+1]
+        y_sliced = y[:max_conc_index+1]
 
-        try: #gaussian fit
-            popt,pcov = curve_fit(gaussian,x,y,p0=[a,mu,sigma],bounds=((0,0,-np.inf),(np.max(y),np.inf,np.inf)))
-            if ((popt[1]>=x.max()) | (popt[1]<=x.min())): #checking that the peak is within time range
+        #logistic fit for more than 2 datapoints
+        if len(y_sliced) > 2: 
+            #initial guess for parameters
+            L = a #maximum value of gaussian fit
+            x0 = np.nanmean(x_sliced) #midpoint x value
+            k = 1.0 #growth rate
+
+            try: #logistic fit
+                popt,pcov = curve_fit(logistic,x_sliced,y_sliced,p0=[L,x0,k],bounds=((L*0.999,0,-np.inf),(L,np.inf,np.inf)))
+                if ((popt[1]>=x_sliced.max()) | (popt[1]<=x_sliced.min())): #checking that the mid point is within time range   
+                    pass
+                    #print("Peak outside range. Skipping.")
+                elif ((popt[1]<x[1]) | (popt[-2]>x[-2])): #checking that the mid point is not at the edges either
+                    pass
+                else:
+                    #save results to df
+                    new_row = pd.DataFrame({"timestamp": [mdates.num2date(popt[1]+x_min).replace(tzinfo=None)], \
+                                            "diameter": [diam], "mid_concentration": [((popt[0]+y_min)+y_min)/2]})
+                    df_at = pd.concat([df_at,new_row],ignore_index=True) #appearance time concentration (~50% maximum concentration), L/2
+
+                    #save logistic fit parameters and peak area edges for channel plotting 
+                    fitting_params.append([diam, y_min, popt[0], popt[1]+x_min, popt[2]]) #[diam,y min for scale,L,x0,k]
+                    
+                    start_time_logi = mdates.num2date(x_sliced[0]+x_min).replace(tzinfo=None) #in days
+                    end_time_logi = mdates.num2date(x_sliced[-1]+x_min).replace(tzinfo=None)
+                    area_edges.append([diam,start_time_logi,end_time_logi]) #[diameter,start time, end time]
+            except:
                 pass
-                #print("Peak outside range. Skipping.")
-            elif ((popt[1]<x[1]) | (popt[-2]>x[-2])): #checking that the peak is not at the edges either
-                pass
-            else:
-                max_conc_time = popt[1] #from gaussian fit
-                
-                #limit x and y to values between start time of peak area and maximum concentration time in peak area
-                max_conc_index = closest(x, max_conc_time)
-                x_sliced = x[:max_conc_index+1]
-                y_sliced = y[:max_conc_index+1]
-                
-                #logistic fit for more than 2 datapoints
-                if len(y_sliced) > 2: 
-                    #initial guess for parameters
-                    L = popt[0] #maximum value of gaussian fit (concentration)
-                    x0 = np.nanmean(x_sliced) #midpoint x value (appearance time)
-                    k = 1.0 #growth rate
-
-                    try: #logistic fit
-                        popt,pcov = curve_fit(logistic,x_sliced,y_sliced,p0=[L,x0,k],bounds=((popt[0]*0.999,0,-np.inf),(popt[0],np.inf,np.inf)))
-                        if ((popt[1]>=x_sliced.max()) | (popt[1]<=x_sliced.min())): #checking that the mid point is within time range   
-                            pass
-                            #print("Peak outside range. Skipping.")
-                        elif ((popt[1]<x[1]) | (popt[-2]>x[-2])): #checking that the mid point is not at the edges either
-                            pass
-                        else:
-                            #save results to df
-                            new_row = pd.DataFrame({"timestamp": [mdates.num2date(popt[1]+x_min).replace(tzinfo=None)], \
-                                                    "diameter": [diam], "mid_concentration": [((popt[0]+y_min)+y_min)/2]})
-                            df_at = pd.concat([df_at,new_row],ignore_index=True) #appearance time concentration (~50% maximum concentration), L/2
-
-                            #save logistic fit parameters and peak area edges for channel plotting 
-                            fitting_params.append([diam, y_min, popt[0], popt[1]+x_min, popt[2]]) #[diam,y min for scale,L,x0,k]
-                            
-                            start_time_logi = mdates.num2date(x_sliced[0]+x_min).replace(tzinfo=None) #in days
-                            end_time_logi = mdates.num2date(x_sliced[-1]+x_min).replace(tzinfo=None)
-                            area_edges.append([diam,start_time_logi,end_time_logi]) #[diameter,start time, end time]
-                    except:
-                        pass
-                        #print("Logistic diverges. Skipping.")                            
-        except:
-            pass
-            #print("Diverges. Skipping.")
+                #print("Logistic diverges. Skipping.")                            
 
     return df_at, fitting_params, area_edges
 def init_methods(df,mpd,mdc,derivative_threshold):
@@ -429,14 +403,14 @@ def init_methods(df,mpd,mdc,derivative_threshold):
     df_peak_areas, derivative_threshold, start_times_list, maxima_list = find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold)
     
     #methods
-    df_mc, mc_params, peak_area_edges_gaus = maximum_concentration(df_interpolated,df_peak_areas)
-    df_at, at_params, peak_area_edges_logi = appearance_time(df_interpolated,df_peak_areas)
-    
+    df_mc, mc_params, mc_area_edges = maximum_concentration(df_interpolated,df_peak_areas)
+    df_at, at_params, at_area_edges = appearance_time(df_interpolated,mc_params,mc_area_edges)
+
     #find points that are poorly defined
     time_edges = [df.index[0],df.index[1],df.index[-2],df.index[-1]]
     i_to_remove_mc, i_to_remove_at = [], []
     
-    for times, areas, i_to_remove in [(df_mc['timestamp'],peak_area_edges_gaus,i_to_remove_mc),(df_at['timestamp'],peak_area_edges_logi,i_to_remove_at)]:
+    for times, areas, i_to_remove in [(df_mc['timestamp'],mc_area_edges,i_to_remove_mc),(df_at['timestamp'],at_area_edges,i_to_remove_at)]:
         for time, area in zip(times,areas):
             diam, start, end = area
             if start in time_edges or end in time_edges:
@@ -450,18 +424,17 @@ def init_methods(df,mpd,mdc,derivative_threshold):
     incomplete_mc_xyz = [incomplete_mc_x,incomplete_mc_y,incomplete_mc_z]
     incomplete_at_xyz = [incomplete_at_x,incomplete_at_y,incomplete_at_z]
 
-    return df_mc, df_at, incomplete_mc_xyz, incomplete_at_xyz, peak_area_edges_gaus, peak_area_edges_logi, mc_params, at_params, derivative_threshold, start_times_list, maxima_list
+    return df_mc, df_at, incomplete_mc_xyz, incomplete_at_xyz, mc_area_edges, at_area_edges, mc_params, at_params, derivative_threshold, start_times_list, maxima_list
 
 ################## GROWTH RATES ####################
 
 def points_in_existing_line(unfinished_lines, point, nearby_point=None):
-    score = False
+    ''' Calculates in how many line a datapoint is.'''
     if nearby_point is None:
-        if any(point in line for line in unfinished_lines):
-            score = True
+        score = sum([1 for line in unfinished_lines if point in line])
     else:
-        if any(point in line for line in unfinished_lines) or any(nearby_point in line for line in unfinished_lines):
-            score = True
+        score = sum([1 for line in unfinished_lines if point in line])
+        score += sum([1 for line in unfinished_lines if nearby_point in line])
     return score
 def extract_data(line,exclude_start=0,exclude_end=0):
     return ([point[1] for point in line[exclude_start:len(line)-exclude_end]],  #x values
@@ -487,6 +460,7 @@ def find_growth(df,times,diams,mgsc,a,gret):
     #init
     unfinished_lines = []
     finalized_lines = []
+    results_dict = {}
     df_maes = pd.DataFrame()
     mtd = 2.5 #h, initial maximum time difference
     
@@ -501,150 +475,150 @@ def find_growth(df,times,diams,mgsc,a,gret):
                 diam_channel = df.columns.values[df.columns.values >= diam0][ii] #diam in current bin
             except IndexError:
                 break #reached diameter of 1000nm
-            diam_diff = diam_channel-diam0
-            channel_points = [point for point in data_sorted if point[1] == diam_channel]
-            
-            #skip if no datapoints in current channel
-            if not channel_points: 
-                continue
             
             #allowed time difference depends on growth rate and diam difference between last and new point
-            low_time_limit = time0-mtd/24 #days
-            high_time_limit = time0+mtd/24
+            base_low_time_limit = time0-mtd/24 #days
+            base_high_time_limit = time0+mtd/24
             
-            closest_channel_points = [point for point in channel_points if point[0] >= low_time_limit and point[0] <= high_time_limit]
-            if not closest_channel_points: 
+            channel_points = [point for point in data_sorted if point[1] == diam_channel]
+            closest_channel_points = [point for point in channel_points  \
+                                      if point[0] >= base_low_time_limit and point[0] <= base_high_time_limit]
+            if not closest_channel_points: #skip if no nearby datapoints in diam channel
                 continue
             
-            #find nearest new point 
-            nearby_datapoint = tuple(min(channel_points, key=lambda point: abs(point[0] - time0)))
-            time1, diam1 = nearby_datapoint
-            
-            stricter_time_limits = False
-            if points_in_existing_line(unfinished_lines,datapoint):
-                #find index of that line
-                for line in unfinished_lines:
-                    if datapoint in line and len(line) > 2:
-                        #calculate growth rate
-                        x, y = extract_data(line) #x=diams,y=times
-                        popt, pcov = curve_fit(linear, x, y)
-                        GR = 1/(popt[0]) #nm/days
-                        
-                        min_time = min(mdates.date2num(df.index))
-                        b = 1.5/24 #1.5 hours
-                        if GR >= 0:
-                            low_time_limit = 1/(GR * 1.5) * diam_diff - b + time0 #days
-                            high_time_limit = 1.5/GR * diam_diff + b + time0
-                        else:
-                            low_time_limit = 1.5/GR * diam_diff - b + time0 #days
-                            high_time_limit = 1/(GR * 1.5) * diam_diff + b + time0
-                    
-                        #minimize MAE when choosing the new point
-                        maes = []
-                        for point in closest_channel_points:
-                            line_with_new_point = line + [point]
-                            x, y = extract_data(line_with_new_point) #x=diams,y=time
-                            popt, pcov = curve_fit(linear, x, y)
-                            mae = cal_mae(x,y,popt)
-                            maes.append(mae)
-
-                        min_mae_i = maes.index(min(maes))
-                        nearby_datapoint = tuple(closest_channel_points[min_mae_i])
-                        
-                        stricter_time_limits = True
-                        break
-
-            time_diff = abs(nearby_datapoint[0] - time0)
-
-            
-            if time1 >= low_time_limit and time1 <= high_time_limit: 
-                ### add new point to a line ###
-                if not points_in_existing_line(unfinished_lines,datapoint,nearby_datapoint):
-                    if diam0 > mgsc or diam1 > mgsc:
-                        break
-                    unfinished_lines.append([datapoint,nearby_datapoint])
-                    
-                elif points_in_existing_line(unfinished_lines,datapoint,nearby_datapoint):
-                    #find index of that line
-                    for line in unfinished_lines:
-                        if datapoint in line:
-                            line.append(nearby_datapoint)
-                            break
+            #closest datapoint next in list
+            if points_in_existing_line(unfinished_lines,datapoint) == 0:
+                nearby_datapoint = tuple(min(closest_channel_points, key=lambda point: abs(point[0] - time0)))
+                time1, diam1 = nearby_datapoint
+            elif points_in_existing_line(unfinished_lines,datapoint) > 1: #datapoint in many lines (convergence)
+                converging_lines = [line for line in unfinished_lines if datapoint in line]
+                nearby_datapoint = tuple(min(closest_channel_points, key=lambda point: abs(point[0] - time0)))
                 
-                #make sure datapoints in every line are sorted by diameter
-                unfinished_lines = [list(set(line)) for line in unfinished_lines]
-                unfinished_lines = [sorted(sublist, key=lambda x: x[1]) for sublist in unfinished_lines] 
-
-
-                ### make a linear fit to check mae for line with new datapoint ###
-                iii, current_line = [(i,line) for i,line in enumerate(unfinished_lines) if nearby_datapoint in line][0]
-                
-                #define variables for linear fit
-                x, y = extract_data(current_line) #x=diams,y=times
-                x_last_excluded, y_last_excluded = extract_data(current_line,exclude_end=1)
-                x_first_excluded, y_first_excluded = extract_data(current_line,exclude_start=1)
-                
-                if len(current_line) <= 2:
-                    break #proceed to next datapoint
-                elif len(current_line) == 3:
+                #continue the line that best fits the next datapoint
+                #minimize MAE
+                maes = []
+                for line in converging_lines:
+                    line_with_new_point = line + [nearby_datapoint]
+                    x, y = extract_data(line_with_new_point) #x=diams,y=times
                     popt, pcov = curve_fit(linear, x, y)
                     mae = cal_mae(x,y,popt)
-                else:
-                    #fit to line excluding last datapoint, but calculate mae with full line
-                    popt_last_excluded, pcov = curve_fit(linear, x_last_excluded, y_last_excluded)
-                    GR_last_excluded = 1/(popt_last_excluded[0]*24) #nm/h
-                    
-                    #fit to full line
+                    maes.append(mae)
+
+                min_mae_i = maes.index(min(maes))
+                line_before = converging_lines[min_mae_i]
+                iii = unfinished_lines.index(line_before)
+            else:
+                #minimize MAE when choosing the new point
+                iii, line_before = [(i,line) for i,line in enumerate(unfinished_lines) if datapoint in line][0]
+
+                maes = []
+                for point in closest_channel_points:
+                    line_with_new_point = line_before + [point]
+                    x, y = extract_data(line_with_new_point) #x=diams,y=times
                     popt, pcov = curve_fit(linear, x, y)
                     mae = cal_mae(x,y,popt)
-                    GR = 1/(popt[0]*24)
-                    
-                    gr_abs_precentage_error = abs(GR-GR_last_excluded) / abs(GR_last_excluded) * 100
+                    maes.append(mae)
 
+                min_mae_i = maes.index(min(maes))
+                nearby_datapoint = tuple(closest_channel_points[min_mae_i])
                 
-                ### check mae and gr error thresholds ###
-                mae_threshold = a*len(current_line)**(-1) #a*x^(-1)
-                gr_error_threshold = gret
+                time1, diam1 = nearby_datapoint
+                diam_diff = diam_channel-diam0
+                
+                #more strict diameter range when finding the 3rd/4th point
+                if len(line_before) == 2 or len(line_before) == 3:
+                    #calculate growth rate
+                    x, y = extract_data(line_before) #x=diams,y=times
+                    popt, pcov = curve_fit(linear, x, y)
+                    GR = 1/(popt[0]) #nm/days
+
+                    b = 0 #1 hour in days
+                    if GR >= 0:
+                        low_time_limit = 1/(GR * 3) * diam_diff - b + time0 #days
+                        high_time_limit = 3/GR * diam_diff + b + time0
+                    else:
+                        low_time_limit = 3/GR * diam_diff - b + time0 #days
+                        high_time_limit = 1/(GR * 3) * diam_diff + b + time0
+                        
+                    #if nearby datapoint is not in the time limits
+                    if time1 <= low_time_limit or time1 >= high_time_limit:
+                        unfinished_lines[iii] = [datapoint,nearby_datapoint]
+                        break
+            
+            ### add new point to a line ###
+            if points_in_existing_line(unfinished_lines,datapoint) == 0:
+                if diam0 > mgsc or diam1 > mgsc:
+                    break
+                unfinished_lines.append([datapoint,nearby_datapoint])
+                break
+                
+            elif points_in_existing_line(unfinished_lines,datapoint) > 0:
+                unfinished_lines[iii] = line_before + [nearby_datapoint]
+            
+            #make sure datapoints in every line are sorted by diameter
+            unfinished_lines = [list(set(line)) for line in unfinished_lines]
+            unfinished_lines = [sorted(sublist, key=lambda x: x[1]) for sublist in unfinished_lines] 
+
+
+            ### make a linear fit to check mae for line with new datapoint ###
+            iii, line_after = [(i,line) for i,line in enumerate(unfinished_lines) if datapoint in line and nearby_datapoint in line][0]
+            
+            #define variables for linear fit
+            x, y = extract_data(line_after) #x=diams,y=times
+            x_last_excluded, y_last_excluded = extract_data(line_after,exclude_end=1)
+            x_first_4, y_first_4 = extract_data(line_after,exclude_end=max(len(line_after)-4, 0))
+            x_last_4, y_last_4 = extract_data(line_after,exclude_start=max(len(line_after)-4, 0))
+            
+            ### check mae and gr error thresholds ###    
+            mae_threshold = a*len(line_after)**(-1) #a*x^(-1)
+            min_line_length = 4
+
+
+            if len(line_after) <= min_line_length:
+                popt, pcov = curve_fit(linear, x, y)
+                mae = cal_mae(x,y,popt)
                 
                 if mae > mae_threshold:
-                    #calculate mae without the first and then last datapoint 
-                    popt, pcov = curve_fit(linear, x_first_excluded, y_first_excluded)
-                    mae_no_first = cal_mae(x_first_excluded,y_first_excluded,popt) 
-                    
-                    popt, pcov = curve_fit(linear, x_last_excluded, y_last_excluded)
-                    mae_no_last = cal_mae(x_last_excluded,y_last_excluded,popt)
-                    
-                    #remove last or first point based on mae comparison
-                    if mae_no_last <= mae_no_first and len(current_line) > 4:
-                        unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
-                        finalized_lines.append(current_line[:-1])
-                        
-                        if not diam0 > mgsc or diam1 > mgsc:
-                            break
-                        unfinished_lines.append([datapoint,nearby_datapoint]) #new line starts with end of previous one
-                    else:
-                        unfinished_lines[iii] = current_line[1:] #another chance for shorter lines
+                    unfinished_lines[iii] = line_after[1:] #remove first point  
+                break
+            else:
+                #calculate growth rates of first 4 and last 4 points
+                popt_first_4, pcov = curve_fit(linear, x_first_4, y_first_4)
+                GR_first_4 = 1/(popt_first_4[0]*24)
+                popt_last_4, pcov = curve_fit(linear, x_last_4, y_last_4)
+                GR_last_4 = 1/(popt_last_4[0]*24)
                 
-                elif len(current_line) >= 5 and gr_abs_precentage_error > gr_error_threshold: #only after 5 or more datapoints
-                    #remove last point if threshold is exceeded
-                    unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
-                    finalized_lines.append(current_line[:-1])
+                #fit to full line
+                popt, pcov = curve_fit(linear, x, y)
+                mae = cal_mae(x,y,popt)
+                
+                #if growth rate is under 1nm/h error is +-0.5nm/h, otherwise gret
+                gr_error_threshold = 0.5 if GR <= 1 else gret 
+                gr_abs_precentage_error = abs(GR_first_4-GR_last_4) / abs(GR_last_4) * 100
+
+                if mae > mae_threshold:
+                    unfinished_lines = [line for line in unfinished_lines if line != line_after]
+                    #unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
+                    finalized_lines.append(line_after[:-1])
                     
                     if diam0 > mgsc or diam1 > mgsc:
                         break
-                    unfinished_lines.append([datapoint,nearby_datapoint])
+                    unfinished_lines.append([datapoint,nearby_datapoint]) #new line starts with end of previous one
 
+                elif len(line_after) >= 4 and gr_abs_precentage_error > gr_error_threshold:
+                    #remove last point if threshold is exceeded
+                    unfinished_lines = [line for line in unfinished_lines if line != line_after]
+                    #unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
+                    finalized_lines.append(line_after[:-1])
+ 
+                    if diam0 > mgsc or diam1 > mgsc:
+                        break
+                    unfinished_lines.append([datapoint,nearby_datapoint])
                 break
-            else: #keep looking for next datapoint until end of points if the next one isnt suitable
-                
-                #TÄMÄ JOS HALUAA ET ALKAA UUS SUORA KUN STRICTER TIME LIM EI TÄYTY
-                # if stricter_time_limits:
-                #     if time1 >= time0-mtd/24 and time1 <= time0+mtd/24:
-                        
-                
-                continue
+
     
     #add rest of the lines to finalized lines and by diameter
+    unfinished_lines = [line for line in unfinished_lines if len(line) >= min_line_length]
     finalized_lines.extend(unfinished_lines)
     finalized_lines = [sorted(line, key=lambda x: x[1]) for line in finalized_lines] 
     
@@ -680,18 +654,21 @@ def find_growth(df,times,diams,mgsc,a,gret):
                 finalized_lines[i] = line_1st_half
                 finalized_lines.append(line_2nd_half)  
     '''
-    #calculate maes to show on plot
-    for finalized_line in finalized_lines:
+    #calculate maes and growth rates
+    for i, finalized_line in enumerate(finalized_lines):
         x, y = extract_data(finalized_line) #x=diams,y=times
         popt, pcov = curve_fit(linear, x, y)
-        mae = cal_mae(x,y,popt)
+        mae = cal_mae(x,y,popt) #h
+        GR = 1/(popt[0]*24) #nm/h
+        
+        results_dict[f'line{str(i)}'] = {'points': finalized_line, 'growth rate': GR, 'mae': mae}
         
         new_row = pd.DataFrame({"length": [len(x)], "mae": [mae]})
         df_maes = pd.concat([df_maes,new_row],ignore_index=True)
         
     df_maes.to_csv('./df_maes.csv', sep=',', header=True, index=True, na_rep='nan')
-    
-    return finalized_lines
+
+    return results_dict
 def filter_lines(lines):
     '''
     Filter datapoints of lines that are too short or
@@ -713,7 +690,7 @@ def init_find(df,df_mc,df_AT,mgsc,a,gret):
     mc_filtered = filter_lines(mc_data)
     at_filtered = filter_lines(at_data)
     
-    return mc_filtered, at_filtered 
+    return mc_data, at_data 
     
 #################### PLOTTING ######################
 
