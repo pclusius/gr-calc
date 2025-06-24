@@ -4,23 +4,9 @@ from datetime import timedelta
 from scipy.optimize import curve_fit
 from operator import itemgetter
 import matplotlib.dates as mdates
-import json
+import statsmodels.api as sm
+from matplotlib.dates import date2num
 
-def timestamp_indexing(timestamps):
-    '''
-    Creates list of indices corresponding to given timestamp list.
-    Needed when there are gaps in time lists.
-    '''
-    start_time = timestamps[0]
-    time_interval = 30 #minutes
-    indices = []
-
-    for time in timestamps:
-        mins_since_start = abs((time - start_time).total_seconds() / 60) #for each timestamp
-        index = int(mins_since_start / time_interval) #divide by interval
-        indices.append(index)
-    
-    return np.array(indices)
 def closest(list, number):
     '''
     Finds closest element in a list to a given value.
@@ -37,6 +23,23 @@ def cal_mape(x,y,popt):
     return mape
 def linear(x,k,b):
     return k*x + b
+def robust_fit(x,y):
+        """
+        Robust linear regression using statsmodels with HuberT weighting.
+        """
+        x_linear = np.linspace(np.min(x), np.max(x),num=len(y))
+        rlm_HuberT = sm.RLM(y, sm.add_constant(x), M=sm.robust.norms.HuberT())
+        rlm_results = rlm_HuberT.fit()
+        
+        #predict data of estimated models
+        y_rlm = rlm_results.predict(sm.add_constant(x_linear))
+        y_params = rlm_results.params
+        
+        #print("Statsmodel robus linear model results: \n",rlm_results.summary())
+        #print("\nparameters: ",rlm_results.params)
+        #print(help(sm.RLM.fit))
+
+        return x_linear, y_rlm, y_params
 def points_in_existing_line(unfinished_lines, point, nearby_point=None):
     ''' Calculates in how many line a datapoint is.'''
     if nearby_point is None:
@@ -46,7 +49,7 @@ def points_in_existing_line(unfinished_lines, point, nearby_point=None):
         score += sum([1 for line in unfinished_lines if nearby_point in line])
     return score
 def extract_data(line,exclude_start=0,exclude_end=0):
-    return (timestamp_indexing([point[0] for point in line[exclude_start:len(line)-exclude_end]]),  #x values
+    return (date2num([point[0] for point in line[exclude_start:len(line)-exclude_end]]),  #x values
             [point[1] for point in line[exclude_start:len(line)-exclude_end]])  #y values
 
 def find_growth(df_peaks,a,gret):
@@ -147,7 +150,7 @@ def find_growth(df_peaks,a,gret):
                     #calculate growth rate
                     x, y = extract_data(line_before) #x=times,y=diams
                     popt, pcov = curve_fit(linear, x, y)
-                    GR = popt[0] * 2 #nm/h
+                    GR = popt[0]/24 #nm/h
 
                     b = 2 if diam1 < 20 else 0.1 * diam1 #2nm if dp<20nm, else 10% of new peak 
                     if GR >= 0:
@@ -159,7 +162,7 @@ def find_growth(df_peaks,a,gret):
                         
                     #if nearby datapoint is not in the diameter limit
                     if diam1 <= low_diam_limit or diam1 >= high_diam_limit:
-                        unfinished_lines[iii] = [datapoint,nearby_datapoint]
+                        unfinished_lines[iii] = line_before[1:] + [nearby_datapoint]
                         # print("strict diam limit not met (shift one point forward)")
                         # breakpoint()
                         break
@@ -211,12 +214,6 @@ def find_growth(df_peaks,a,gret):
                 # breakpoint()
                 break
             else:
-                # #calculate mape of last 4 points
-                # x_last4 = timestamp_indexing([datapoint[0] for datapoint in line_after[-4:]])
-                # y_last4 = [datapoint[1] for datapoint in line_after[-4:]]
-                # popt_last4, pcov = curve_fit(linear, x_last4, y_last4)
-                # mape_last4 = cal_mape(x_last4,y_last4,popt_last4)
-
                 #calculate growth rates of first 4 and last 4 points
                 popt_first_4, pcov = curve_fit(linear, x_first_4, y_first_4)
                 GR_first_4 = popt_first_4[0] * 2
@@ -228,8 +225,13 @@ def find_growth(df_peaks,a,gret):
                 mape = cal_mape(x,y,popt)
 
                 #if growth rate is under 1nm/h error is +-0.5nm/h, otherwise gret
-                gr_error_threshold = 0.5 if GR <= 1 else gret 
-                gr_abs_precentage_error = abs(GR_first_4-GR_last_4) / abs(GR_last_4) * 100
+                if abs(GR) <= 1:
+                    gr_error_threshold = 0.5
+                    gr_error = abs(GR_first_4-GR_last_4) #nm
+                else:
+                    gr_error_threshold = gret
+                    gr_error = abs(GR_first_4-GR_last_4) / abs(GR_last_4) * 100 #%
+
 
                 if mape > mape_threshold:
                     
@@ -255,7 +257,7 @@ def find_growth(df_peaks,a,gret):
                     # breakpoint()
                     break
                 
-                elif len(line_after) >= 4 and gr_abs_precentage_error > gr_error_threshold:
+                elif len(line_after) >= 4 and gr_error > gr_error_threshold:
                     # print("gr error,remove last point",line_after)
 
                     #remove last point if threshold is exceeded
@@ -273,62 +275,16 @@ def find_growth(df_peaks,a,gret):
     finalized_lines.extend(unfinished_lines)
     finalized_lines = [sorted(line, key=lambda x: x[0]) for line in finalized_lines] 
     
-    '''
-    #try splitting line into two parts from the middle to lower mape
+    #robust fit, calculate mapes and growth rates
     for i, finalized_line in enumerate(finalized_lines):
-        if len(finalized_line) >= 7: #at least 7 datapoints needed  
-            middle_index = len(finalized_line)//2
-            line_1st_half = finalized_line[:middle_index+1] #overlap +1
-            line_2nd_half = finalized_line[middle_index:]
-            
-            #calculate if mape lowered in both halves
-            #whole line
-            x = timestamp_indexing([datapoint[0] for datapoint in finalized_line])
-            y = [datapoint[1] for datapoint in finalized_line] #diams
-            popt, pcov = curve_fit(linear, x, y)
-            mape = cal_mape(x,y,popt)
-            
-            #1st half
-            x = timestamp_indexing([datapoint[0] for datapoint in line_1st_half])
-            y = [datapoint[1] for datapoint in line_1st_half] #diams
-            popt, pcov = curve_fit(linear, x, y)
-            mape1 = cal_mape(x,y,popt)
-            
-            #2nd half
-            x = timestamp_indexing([datapoint[0] for datapoint in line_2nd_half])
-            y = [datapoint[1] for datapoint in line_2nd_half]
-            popt, pcov = curve_fit(linear, x, y)
-            mape2 = cal_mape(x,y,popt)
-            
-            if mape1 < mape and mape2 <= mape:
-                #remove the second half of current line and add it as its own line to finalized lines
-                finalized_lines[i] = line_1st_half
-                finalized_lines.append(line_2nd_half)  
-            
-            # #relative change in mape
-            # rel_diff1 = ((mape1-mape)/mape) * 100
-            # rel_diff2 = ((mape2-mape)/mape) * 100
-            
-            # print("rel_diff1",rel_diff1,"rel_diff2",rel_diff2)
-            # print("mape",mape,"mape1",mape1,"mape2",mape2)
-            # print()
-            
-            # #if mape improves (decreases) by 40% split line in two
-            # if rel_diff1 <= -40 or rel_diff2 <= -40:
-            #     #remove the second half of current line and add it as its own line to finalized lines
-            #     finalized_lines[i] = line_1st_half
-            #     finalized_lines.append(line_2nd_half)  
-    '''
-    
-    #calculate mapes and growth rates
-    for i, finalized_line in enumerate(finalized_lines):
-        x = timestamp_indexing([datapoint[0] for datapoint in finalized_line]) #time
-        y = [datapoint[1] for datapoint in finalized_line] #diams
-        popt, pcov = curve_fit(linear, x, y)
-        mape = cal_mape(x,y,popt) #%
-        GR = popt[0] * 2 #nm/h
+        x = date2num([datapoint[0] for datapoint in finalized_line]) #time days
+        y = [datapoint[1] for datapoint in finalized_line] #diams nm
+        x_fit, y_fit, params = robust_fit(x,y)
+        mape = cal_mape(x,y,[params[1],params[0]]) #%
+        GR = params[1]/24 #nm/h
         
-        results_dict[f'line{str(i)}'] = {'points': finalized_line, 'growth rate': GR, 'mape': mape}
+        fitted_points = [(time,diam) for time,diam in zip(x_fit,y_fit)]
+        results_dict[f'line{str(i)}'] = {'points': finalized_line, 'fitted points': fitted_points, 'growth rate': GR, 'mape': mape}
         
         new_row = pd.DataFrame({"length": [len(x)], "mape": [mape]})
         df_mapes = pd.concat([df_mapes,new_row],ignore_index=True)

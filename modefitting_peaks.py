@@ -2,18 +2,24 @@ import aerosol.fitting as af #janne's aerosol functions
 import json 
 import pandas as pd
 
-def find_peaks(df,fit_multimodes=False):
+def find_peaks(df,file,fit_multimodes=False):
+    file_name = file.split('.')[0]
     
     if fit_multimodes:
         fit_results = af.fit_multimodes(df)
 
         #write json data to a file
-        with open('fit_results.json', 'w') as output_file:
+        with open(f'{file_name}_modefit.json', 'w') as output_file:
             json.dump(fit_results, output_file, indent=2)
 
     #load the results
-    with open("fit_results.json") as file:
-        fits = json.load(file)
+    try:
+        with open(f'{file_name}_modefit.json') as file:
+            fits = json.load(file)
+    except FileNotFoundError:
+        print(f"ERROR: No such file or directory '{file_name}_modefit.json'")
+        print("Please change: fit_multimodes = True")
+        raise SystemExit
 
     #making a dataframe from json file
     rows_list = []

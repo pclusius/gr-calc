@@ -7,7 +7,7 @@ import matplotlib.dates as mdates
 from operator import itemgetter
 import statsmodels.api as sm
 from sklearn import linear_model
-import json
+from matplotlib.dates import num2date, date2num
 
 
 #################### FUNCTIONS #####################
@@ -26,6 +26,7 @@ def closest(list, number):
         
     return value.index(min(value))
 def cal_mape(x,y,popt):
+    '''Calculates mean average percentage error (%).'''
     x = np.array(x)
     y = np.array(y)
     y_predicted = linear(x, *popt)
@@ -34,8 +35,7 @@ def cal_mape(x,y,popt):
     return mape
 def cal_mae(x,y,popt):
     """
-    Calculates mean absolute error (MAE).
-    Result in hours.
+    Calculates mean absolute error (hours).
     """
     x = np.array(x)
     y = np.array(y)
@@ -58,9 +58,7 @@ def cal_mase(x,y,popt):
 def cal_derivative(dataframe):
     '''
     Calculates 1st derivatives between neighbouring datapoints. 
-    Takes in dataframe and wanted range of time in days (in case of smaller dataframes).
-    Returns dataframe with derivatives.
-    [ d( dN/dlog(Dp) )/dt ] = cm⁻³/h
+    Returns dataframe with derivatives, unit: cm⁻³/h
     '''
     df_derivatives = pd.DataFrame(np.nan, index=dataframe.index[1:], columns=dataframe.columns) 
     
@@ -75,8 +73,7 @@ def cal_derivative(dataframe):
     return df_derivatives
 def average_filter(dataframe,window):         
     '''
-    Smoothens data in dataframe with averafe filter and given window.
-    Returns smoothened dataframe.
+    Smoothens data in dataframe with average filter and given window.
     '''
     smoothed_df = dataframe.copy()
     
@@ -92,6 +89,23 @@ def logistic(x,L,x0,k):
     return L / (1 + np.exp(-k*(x-x0))) 
 def linear(x,k,b):
     return k*x + b
+def robust_fit(x,y):
+        """
+        Robust linear regression using statsmodels with HuberT weighting.
+        """
+        x_linear = np.linspace(np.min(x), np.max(x),num=len(y))
+        rlm_HuberT = sm.RLM(y, sm.add_constant(x), M=sm.robust.norms.HuberT())
+        rlm_results = rlm_HuberT.fit()
+        
+        #predict data of estimated models
+        y_rlm = rlm_results.predict(sm.add_constant(x_linear))
+        y_params = rlm_results.params
+        
+        #print("Statsmodel robus linear model results: \n",rlm_results.summary())
+        #print("\nparameters: ",rlm_results.params)
+        #print(help(sm.RLM.fit))
+
+        return x_linear, y_rlm, y_params
 
 #################### METHODS #######################
 
@@ -245,17 +259,13 @@ def find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold):
     return df_peak_areas, derivative_threshold, start_times_list, maxima_list
 def maximum_concentration(df,df_peak_areas): 
     '''
-    Calculates the maximum concentration.
-    Takes in dataframe from wanted area in the PSD.
+    Calculates maximum concentration in areas.
     Returns:
-    max_conc_time =         list of maximum concentration times (UTC)
-    max_conc_diameter =     list of maximum concentration diameters (nm)
-    max_conc =              list of maximum concentrations in corresponding datapoints
-    maxcon_x_days =         list of time in days
+
     fitting_params =        list of gaussian fit parameters and more:
                             [[start time of peak area UTC, end time of peak area UTC,
                             parameter A, parameter mu, parameter sigma], ...]
-    threshold_deriv =       chosen derivative threshold value
+    area_edges =            
     '''
     #create lists for results
     df_mc = pd.DataFrame()
@@ -415,14 +425,20 @@ def init_methods(df,mpd,mdc,derivative_threshold):
             diam, start, end = area
             if start in time_edges or end in time_edges:
                 i_to_remove.append(list(times).index(time))
-    
+
     incomplete_mc_x, incomplete_at_x = [df_mc['timestamp'][i] for i in i_to_remove_mc], [df_at['timestamp'][i] for i in i_to_remove_at]
     incomplete_mc_y, incomplete_at_y = [df_mc['peak_diameter'][i] for i in i_to_remove_mc], [df_at['diameter'][i] for i in i_to_remove_at]
     incomplete_mc_z, incomplete_at_z = [df_mc['max_concentration'][i] for i in i_to_remove_mc], [df_at['mid_concentration'][i] for i in i_to_remove_at]
 
     #combine to lists
-    incomplete_mc_xyz = [incomplete_mc_x,incomplete_mc_y,incomplete_mc_z]
-    incomplete_at_xyz = [incomplete_at_x,incomplete_at_y,incomplete_at_z]
+    if incomplete_mc_x:
+        incomplete_mc_xyz = [incomplete_mc_x,incomplete_mc_y,incomplete_mc_z]
+    else:
+        incomplete_mc_xyz = []
+    if incomplete_at_x:
+        incomplete_at_xyz = [incomplete_at_x,incomplete_at_y,incomplete_at_z]
+    else:
+        incomplete_at_xyz = []
 
     return df_mc, df_at, incomplete_mc_xyz, incomplete_at_xyz, mc_area_edges, at_area_edges, mc_params, at_params, derivative_threshold, start_times_list, maxima_list
 
@@ -542,7 +558,7 @@ def find_growth(df,times,diams,mgsc,a,gret):
                         
                     #if nearby datapoint is not in the time limits
                     if time1 <= low_time_limit or time1 >= high_time_limit:
-                        unfinished_lines[iii] = [datapoint,nearby_datapoint]
+                        unfinished_lines[iii] = line_before[1:] + [nearby_datapoint]
                         break
             
             ### add new point to a line ###
@@ -565,7 +581,6 @@ def find_growth(df,times,diams,mgsc,a,gret):
             
             #define variables for linear fit
             x, y = extract_data(line_after) #x=diams,y=times
-            x_last_excluded, y_last_excluded = extract_data(line_after,exclude_end=1)
             x_first_4, y_first_4 = extract_data(line_after,exclude_end=max(len(line_after)-4, 0))
             x_last_4, y_last_4 = extract_data(line_after,exclude_start=max(len(line_after)-4, 0))
             
@@ -593,27 +608,32 @@ def find_growth(df,times,diams,mgsc,a,gret):
                 mae = cal_mae(x,y,popt)
                 
                 #if growth rate is under 1nm/h error is +-0.5nm/h, otherwise gret
-                gr_error_threshold = 0.5 if GR <= 1 else gret 
-                gr_abs_precentage_error = abs(GR_first_4-GR_last_4) / abs(GR_last_4) * 100
+                if abs(GR) <= 1:
+                    gr_error_threshold = 0.5
+                    gr_error = abs(GR_first_4-GR_last_4) #nm
+                else:
+                    gr_error_threshold = gret
+                    gr_error = abs(GR_first_4-GR_last_4) / abs(GR_last_4) * 100 #%
+                
 
                 if mae > mae_threshold:
                     unfinished_lines = [line for line in unfinished_lines if line != line_after]
-                    #unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
                     finalized_lines.append(line_after[:-1])
                     
                     if diam0 > mgsc or diam1 > mgsc:
                         break
                     unfinished_lines.append([datapoint,nearby_datapoint]) #new line starts with end of previous one
 
-                elif len(line_after) >= 4 and gr_abs_precentage_error > gr_error_threshold:
+                elif len(line_after) >= 4 and gr_error > gr_error_threshold:
                     #remove last point if threshold is exceeded
                     unfinished_lines = [line for line in unfinished_lines if line != line_after]
-                    #unfinished_lines = [line for line in unfinished_lines if nearby_datapoint not in line]
                     finalized_lines.append(line_after[:-1])
  
                     if diam0 > mgsc or diam1 > mgsc:
                         break
                     unfinished_lines.append([datapoint,nearby_datapoint])
+                
+                #breakpoint()
                 break
 
     
@@ -654,18 +674,19 @@ def find_growth(df,times,diams,mgsc,a,gret):
                 finalized_lines[i] = line_1st_half
                 finalized_lines.append(line_2nd_half)  
     '''
-    #calculate maes and growth rates
+    #robust fit, calculate mapes and growth rates
     for i, finalized_line in enumerate(finalized_lines):
         x, y = extract_data(finalized_line) #x=diams,y=times
-        popt, pcov = curve_fit(linear, x, y)
-        mae = cal_mae(x,y,popt) #h
-        GR = 1/(popt[0]*24) #nm/h
+        x_fit, y_fit, params = robust_fit(x,y)
+        mae = cal_mae(x,y,[params[1],params[0]]) #h
+        GR = 1/(params[1]*24) #nm/h
         
-        results_dict[f'line{str(i)}'] = {'points': finalized_line, 'growth rate': GR, 'mae': mae}
+        fitted_points = [(time,diam) for diam,time in zip(x_fit,y_fit)]
+        results_dict[f'line{str(i)}'] = {'points': finalized_line, 'fitted points': fitted_points, 'growth rate': GR, 'mae': mae}
         
         new_row = pd.DataFrame({"length": [len(x)], "mae": [mae]})
         df_maes = pd.concat([df_maes,new_row],ignore_index=True)
-        
+
     df_maes.to_csv('./df_maes.csv', sep=',', header=True, index=True, na_rep='nan')
 
     return results_dict
