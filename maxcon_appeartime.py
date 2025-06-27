@@ -3,11 +3,11 @@ import pandas as pd
 from datetime import timedelta
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from operator import itemgetter
 import statsmodels.api as sm
 from sklearn import linear_model
-from matplotlib.dates import num2date, date2num
+from matplotlib.dates import num2date, date2num, DateFormatter
+from time import time
 
 
 #################### FUNCTIONS #####################
@@ -25,36 +25,13 @@ def closest(list, number):
             value.append(tuple(abs(np.subtract(i,number))))
         
     return value.index(min(value))
-def cal_mape(x,y,popt):
-    '''Calculates mean average percentage error (%).'''
-    x = np.array(x)
-    y = np.array(y)
-    y_predicted = linear(x, *popt)
-    absolute_error = np.abs(y - y_predicted)
-    mape = np.mean(absolute_error / y) * 100
-    return mape
 def cal_mae(x,y,popt):
-    """
-    Calculates mean absolute error (hours).
-    """
+    '''Calculates mean absolute error (hours).'''
     x = np.array(x)
     y = np.array(y)
     y_predicted = linear(x, *popt)
     mean_absolute_error = np.mean(np.abs(y - y_predicted)) * 24
     return mean_absolute_error
-def cal_mase(x,y,popt):
-    """
-    Problems:
-    - dividing by deviation allows for lines that are long in time to have more deviation
-    - error is smaller the bigger the MAD is...
-    """
-    x = np.array(x)
-    y = np.array(y)
-    y_predicted = linear(x, *popt)
-    mean_absolute_error = np.mean(np.abs(y - y_predicted))
-    mean_absolute_deviation = np.mean(np.abs(y - np.mean(y)))
-    mase = np.mean(mean_absolute_error/mean_absolute_deviation)
-    return mase   
 def cal_derivative(dataframe):
     '''
     Calculates 1st derivatives between neighbouring datapoints. 
@@ -63,7 +40,7 @@ def cal_derivative(dataframe):
     df_derivatives = pd.DataFrame(np.nan, index=dataframe.index[1:], columns=dataframe.columns) 
     
     #convert time to days 
-    time_days = mdates.date2num(dataframe.index)
+    time_days = date2num(dataframe.index)
     
     for i in dataframe.columns: 
         N = dataframe[i] #concentration
@@ -72,11 +49,8 @@ def cal_derivative(dataframe):
         df_derivatives.loc[:, i] = dNdt #add calculated derivatives to dataframe
     return df_derivatives
 def average_filter(dataframe,window):         
-    '''
-    Smoothens data in dataframe with average filter and given window.
-    '''
+    '''Smoothens data in dataframe with average filter and given window.'''
     smoothed_df = dataframe.copy()
-    
     for i in dataframe.columns:
        smoothed_df[i] = smoothed_df[i].rolling(window=window, center=True).mean()
     smoothed_df.dropna()
@@ -90,9 +64,7 @@ def logistic(x,L,x0,k):
 def linear(x,k,b):
     return k*x + b
 def robust_fit(x,y):
-        """
-        Robust linear regression using statsmodels with HuberT weighting.
-        """
+        '''Robust linear regression using statsmodels with HuberT weighting.'''
         x_linear = np.linspace(np.min(x), np.max(x),num=len(y))
         rlm_HuberT = sm.RLM(y, sm.add_constant(x), M=sm.robust.norms.HuberT())
         rlm_results = rlm_HuberT.fit()
@@ -112,9 +84,6 @@ def robust_fit(x,y):
 def find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold):
     '''
     Finds peak areas with derivative threshold.
-    Takes a dataframe with concentrations and time (UTC), 
-    dataframe with time derivatives of the concentrations
-    and the wanted derivative threshold.
     Returns dataframe with found peak areas.
     mtd = maximum time difference between peaks to be considered the same horizontal peak area
     mcd = minimum concentration difference between starting concentration and peak concentration
@@ -258,15 +227,8 @@ def find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold):
     df_peak_areas.to_csv('./find_peak_areas.csv', sep=',', header=True, index=True, na_rep='nan')
     return df_peak_areas, derivative_threshold, start_times_list, maxima_list
 def maximum_concentration(df,df_peak_areas): 
-    '''
-    Calculates maximum concentration in areas.
-    Returns:
-
-    fitting_params =        list of gaussian fit parameters and more:
-                            [[start time of peak area UTC, end time of peak area UTC,
-                            parameter A, parameter mu, parameter sigma], ...]
-    area_edges =            
-    '''
+    '''Calculates maximum concentration in peak areas with gaussian fit.'''
+    
     #create lists for results
     df_mc = pd.DataFrame()
     fitting_params = []
@@ -286,31 +248,28 @@ def maximum_concentration(df,df_peak_areas):
         
         #find values from the dataframe
         subset = df.loc[start_time:end_time,diam]
-        x = subset.index #time
-        x = mdates.date2num(x) #time in days
+        x = date2num(subset.index) #time in days
         y = subset.values #concentration
     
-        #rescaling for a more stable fitting
-        x_min = np.min(x) 
+        #rescaling for more stable fitting
+        x_min, y_min = min(x), min(y)
         x = x - x_min
-        y_min = np.min(y)
         y = y - y_min
         
         #initial guess for parameters
         mu=np.mean(x)
         sigma = np.std(x)
-        a = np.max(y)
+        a = max(y)
 
         try: #gaussian fit
-            popt,pcov = curve_fit(gaussian,x,y,p0=[a,mu,sigma],bounds=((0,0,-np.inf),(np.max(y),np.inf,np.inf)))
-            if ((popt[1]<=x.min()) | (popt[1]>=x.max())): #checking that the peak is within time range
-                pass
-                #print("Peak outside range. Skipping.")
-            elif ((popt[1]<x[1]) | (popt[-2]>x[-2])): #checking that the peak is not at the edges either
+            popt,pcov = curve_fit(gaussian,x,y,p0=[a,mu,sigma],bounds=((0,0,-np.inf),(max(y),np.inf,np.inf)))
+            
+            #checking that the peak is within time range and not at the edges
+            if ((popt[1]<=x.min()) | (popt[1]>=x.max()) | (popt[1]<x[1]) | (popt[1]>x[-2])): 
                 pass
             else:
                 #save results to df
-                new_row = pd.DataFrame({"timestamp": [mdates.num2date(popt[1]+x_min).replace(tzinfo=None)], \
+                new_row = pd.DataFrame({"timestamp": [num2date(popt[1]+x_min).replace(tzinfo=None)], \
                                         "peak_diameter": [diam], "max_concentration": [popt[0]+y_min]})
                 df_mc = pd.concat([df_mc,new_row],ignore_index=True)
 
@@ -324,18 +283,8 @@ def maximum_concentration(df,df_peak_areas):
 
     return df_mc, fitting_params, area_edges
 def appearance_time(df,mc_params,mc_area_edges):
-    '''
-    Calculates the appearance times.
-    Takes in dataframe from wanted area in the PSD.
-    Returns:
-    appear_time =       list of appearance times (UTC)
-    appear_diameter =   list of appearance time diameters (nm)
-    mid_conc =          list of appearance time concentrations in corresponding datapoints
-    appear_x_days =     list of time in days
-    fitting_params =    list of logistic fit parameters and more:
-                        [[start time of peak area in days, end time of peak area in days,
-                        parameter L, parameter x0, parameter k], ...]
-    '''
+    '''Calculates appearance times in peak areas with logistic fit.'''
+    
     #create lists for results
     df_at = pd.DataFrame()
     fitting_params = []
@@ -348,22 +297,19 @@ def appearance_time(df,mc_params,mc_area_edges):
         
         #find values from the dataframe
         subset = df.loc[start_time:end_time,diam]
-        x = subset.index #time
-        x = mdates.date2num(x) #time in days
+        x = date2num(subset.index) #time in days
         y = subset.values #concentration
     
-        #rescaling for a more stable fitting
-        x_min = np.min(x) 
+        #rescaling for more stable fitting
+        x_min, y_min = min(x), min(y)
         x = x - x_min
-        y_min = np.min(y)
         y = y - y_min
         mu = mu - x_min
         
         #limit x and y to values between start time of peak area and maximum concentration time in peak area
         max_conc_time = mu
         max_conc_index = closest(x, max_conc_time)
-        x_sliced = x[:max_conc_index+1]
-        y_sliced = y[:max_conc_index+1]
+        x_sliced, y_sliced = x[:max_conc_index+1], y[:max_conc_index+1]
 
         #logistic fit for more than 2 datapoints
         if len(y_sliced) > 2: 
@@ -374,35 +320,61 @@ def appearance_time(df,mc_params,mc_area_edges):
 
             try: #logistic fit
                 popt,pcov = curve_fit(logistic,x_sliced,y_sliced,p0=[L,x0,k],bounds=((L*0.999,0,-np.inf),(L,np.inf,np.inf)))
-                if ((popt[1]>=x_sliced.max()) | (popt[1]<=x_sliced.min())): #checking that the mid point is within time range   
-                    pass
-                    #print("Peak outside range. Skipping.")
-                elif ((popt[1]<x[1]) | (popt[-2]>x[-2])): #checking that the mid point is not at the edges either
+                if ((popt[1]>=x_sliced.max()) | (popt[1]<=x_sliced.min()) | (popt[1]<x_sliced[1])): #checking that the mid point is within time range   
                     pass
                 else:
                     #save results to df
-                    new_row = pd.DataFrame({"timestamp": [mdates.num2date(popt[1]+x_min).replace(tzinfo=None)], \
+                    new_row = pd.DataFrame({"timestamp": [num2date(popt[1]+x_min).replace(tzinfo=None)], \
                                             "diameter": [diam], "mid_concentration": [((popt[0]+y_min)+y_min)/2]})
                     df_at = pd.concat([df_at,new_row],ignore_index=True) #appearance time concentration (~50% maximum concentration), L/2
 
                     #save logistic fit parameters and peak area edges for channel plotting 
                     fitting_params.append([diam, y_min, popt[0], popt[1]+x_min, popt[2]]) #[diam,y min for scale,L,x0,k]
-                    
-                    start_time_logi = mdates.num2date(x_sliced[0]+x_min).replace(tzinfo=None) #in days
-                    end_time_logi = mdates.num2date(x_sliced[-1]+x_min).replace(tzinfo=None)
-                    area_edges.append([diam,start_time_logi,end_time_logi]) #[diameter,start time, end time]
-            except:
-                pass
-                #print("Logistic diverges. Skipping.")                            
+                    area_edges.append([diam,
+                        num2date(x_sliced[0] + x_min).replace(tzinfo=None),
+                        num2date(x_sliced[-1] + x_min).replace(tzinfo=None)])
+            except RuntimeError:
+                continue
+                          
+    return df_at, fitting_params, area_edges
+def disappearance_time(df,mc_params,mc_area_edges):
+    '''Calculates disappearance times in peak areas'''
+    
+    #create lists for results
+    df_at = pd.DataFrame()
+    fitting_params = []
+    area_edges = []
+    
+    #logistic fit to every horizontal area of growth
+    for mc_edge, mc_param in zip(mc_area_edges,mc_params):
+        diam, start_time, end_time = mc_edge
+        diam, a, mu, sigma = mc_param
+        
+        #find values from the dataframe
+        subset = df.loc[start_time:end_time,diam]
+        x = date2num(subset.index) #time in days
+        y = subset.values #concentration
+    
+        #rescaling for more stable fitting
+        x_min, y_min = min(x), min(y)
+        x = x - x_min
+        y = y - y_min
+        mu = mu - x_min
+        
+        
 
+
+        #save results to df
+        new_row = pd.DataFrame({"timestamp": [num2date(popt[1]+x_min).replace(tzinfo=None)], \
+                                "diameter": [diam], "mid_concentration": [((popt[0]+y_min)+y_min)/2]})
+        df_at = pd.concat([df_at,new_row],ignore_index=True) #appearance time concentration (~50% maximum concentration), L/2
+
+
+                          
     return df_at, fitting_params, area_edges
 def init_methods(df,mpd,mdc,derivative_threshold):
-    '''
-    Goes through all ranges and calculates the points for maximum concentration
-    and appearance time methods along with other useful information.
-    x = time, y = diameter, z = concentration
-    mdc = maximum diameter channel for finding more points for the growth periods
-    '''
+    '''Initialize all functions.'''
+    
     #crop dataframe by allowed mdc (maximum diameter channel)
     df = df[df.columns[df.columns <= mdc]]
 
@@ -410,35 +382,46 @@ def init_methods(df,mpd,mdc,derivative_threshold):
     df_interpolated = df.interpolate(method='time')
     df_filtered = average_filter(df_interpolated,window=3)
     df_deriv = cal_derivative(df_filtered) 
+    
+    st = time()
+    print('\n'+'******** Finding peak areas! '+'\n')
     df_peak_areas, derivative_threshold, start_times_list, maxima_list = find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold)
+    print("Areas found! "+"(%s seconds)" % (time() - st))
+    
     
     #methods
+    st = time()
+    print('\n'+'******** Maximum concentration! '+'\n')
     df_mc, mc_params, mc_area_edges = maximum_concentration(df_interpolated,df_peak_areas)
+    print("Done! "+"(%s seconds)" % (time() - st))
+    
+    st = time()
+    print('\n'+'******** Appearance time! '+'\n')
     df_at, at_params, at_area_edges = appearance_time(df_interpolated,mc_params,mc_area_edges)
+    print("Done! "+"(%s seconds)" % (time() - st))
 
     #find points that are poorly defined
     time_edges = [df.index[0],df.index[1],df.index[-2],df.index[-1]]
     i_to_remove_mc, i_to_remove_at = [], []
     
     for times, areas, i_to_remove in [(df_mc['timestamp'],mc_area_edges,i_to_remove_mc),(df_at['timestamp'],at_area_edges,i_to_remove_at)]:
-        for time, area in zip(times,areas):
+        for t, area in zip(times,areas):
             diam, start, end = area
             if start in time_edges or end in time_edges:
-                i_to_remove.append(list(times).index(time))
+                i_to_remove.append(list(times).index(t))
 
-    incomplete_mc_x, incomplete_at_x = [df_mc['timestamp'][i] for i in i_to_remove_mc], [df_at['timestamp'][i] for i in i_to_remove_at]
-    incomplete_mc_y, incomplete_at_y = [df_mc['peak_diameter'][i] for i in i_to_remove_mc], [df_at['diameter'][i] for i in i_to_remove_at]
-    incomplete_mc_z, incomplete_at_z = [df_mc['max_concentration'][i] for i in i_to_remove_mc], [df_at['mid_concentration'][i] for i in i_to_remove_at]
+    #lines close to the edges of the dataset
+    incomplete_mc_xyz = (
+        [[df_mc['timestamp'][i] for i in i_to_remove_mc],
+        [df_mc['peak_diameter'][i] for i in i_to_remove_mc],
+        [df_mc['max_concentration'][i] for i in i_to_remove_mc]]
+        if i_to_remove_mc else [])
 
-    #combine to lists
-    if incomplete_mc_x:
-        incomplete_mc_xyz = [incomplete_mc_x,incomplete_mc_y,incomplete_mc_z]
-    else:
-        incomplete_mc_xyz = []
-    if incomplete_at_x:
-        incomplete_at_xyz = [incomplete_at_x,incomplete_at_y,incomplete_at_z]
-    else:
-        incomplete_at_xyz = []
+    incomplete_at_xyz = (
+        [[df_at['timestamp'][i] for i in i_to_remove_at],
+        [df_at['diameter'][i] for i in i_to_remove_at],
+        [df_at['mid_concentration'][i] for i in i_to_remove_at]]
+        if i_to_remove_at else [])
 
     return df_mc, df_at, incomplete_mc_xyz, incomplete_at_xyz, mc_area_edges, at_area_edges, mc_params, at_params, derivative_threshold, start_times_list, maxima_list
 
@@ -468,7 +451,7 @@ def find_growth(df,times,diams,mgsc,a,gret):
     mae = mean average error
     '''
     #convert time to days
-    times = mdates.date2num(times)
+    times = date2num(times)
     
     #combine to the same list and sort data by diameter
     data_sorted = np.array(sorted(zip(times, diams), key=itemgetter(1,0))) #[[time1,diam1],[time2,diam2]...]
@@ -696,7 +679,7 @@ def filter_lines(lines):
     with too big of an error.
     '''
     #check length of datapoints for each line
-    filtered_lines = [line for line in lines if len(line) >= 4] #length of at least 3 datapoints
+    filtered_lines = [line for line in lines if len(line) >= 4] #length of at least 4 datapoints
     
     #filter lines with too high of a growth rate
     #???
@@ -714,34 +697,6 @@ def init_find(df,df_mc,df_AT,mgsc,a,gret):
     return mc_data, at_data 
     
 #################### PLOTTING ######################
-
-def linear_fit(time,diam,color,show_mae):
-    '''
-    y = time in days
-    x = diameters in nm
-    Flipped as the error is in time.
-    '''
-    #linear least square fits
-    #popt, pcov = curve_fit(linear, np.log(diam), time) #logarthmic diam
-    popt, pcov = curve_fit(linear, diam, time) #linear diam
-    gr = 1/(popt[0]*24) #unit to nm/h from time in days
-    time_fit = popt[0]*np.array(diam) + popt[1]
-    
-    #convert days to UTC
-    time_UTC = [dt.replace(tzinfo=None) for dt in mdates.num2date(time_fit)]
-
-    #plotting
-    #plt.plot(time_UTC,diam,lw=3) #line
-    plt.plot(time_UTC, diam,color=color,linewidth=2)
-    
-    midpoint_idx = len(time_fit) // 2 #growth rate value
-    midpoint_time = time_UTC[midpoint_idx]
-    midpoint_value = diam[midpoint_idx]
-
-
-    #growth rate annotation
-    plt.annotate(f'{gr:.2f}', (midpoint_time, midpoint_value), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-    #ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8) 
 
 def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and_maxima):
     '''
@@ -841,7 +796,6 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
                     maxs = ax1[row_num,0].scatter(max_times, max_concs, s=5, c='black',marker='.', alpha=0.6, zorder=10)
                     lines_and_labels.add((maxs,"possible peak area maxima"))
         
- 
         '''
         #start and end points of modes
         found_ranges = []
@@ -851,19 +805,6 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
                 line1 = ax1[row_num,0].axvspan(start, end, alpha=0.13, color='darkorange')
                 found_ranges.append(edges) #plot the same range once
         '''
-
-        '''
-        #right axis (logarithmic scale)
-        ax2 = ax1[row_num,0].twinx()
-        color2 = "cadetblue"
-        ax2.set_ylabel("log(dN/dlogDp) (cm⁻³)", color=color2, fontsize=8) 
-        ax2.plot(x, y, color=color2, lw=1)
-        for item in ([ax2.title, ax2.xaxis.label, ax2.yaxis.label] + ax2.get_xticklabels() + ax2.get_yticklabels()):
-            item.set_fontsize(8)
-            item.set_fontweight("bold")
-        ax2.tick_params(axis='y', labelcolor=color2)
-        ax2.set_yscale('log')
-        '''
         
         #gaussian fit 
         for params, edges in zip(fitting_params_gaus,peak_area_edges_gaus):
@@ -871,7 +812,7 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
             diam_gaus, start_time, end_time = edges 
             
             peak_area_times_UTC = df_interpolated.loc[start_time:end_time,diam].index
-            peak_area_times = mdates.date2num(peak_area_times_UTC) #time to days
+            peak_area_times = date2num(peak_area_times_UTC) #time to days
             peak_area_concs = df_interpolated.loc[start_time:end_time,diam].values
             
             if diam_params == diameter_list[row_num] and diam_gaus == diameter_list[row_num]: #check that plotting happens in the right channel
@@ -885,7 +826,7 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
             diam_logi, start_time_logi, end_time_logi = edges_logi
 
             peak_area_times_UTC = df_interpolated.loc[start_time_logi:end_time_logi,diam].index
-            peak_area_times = mdates.date2num(peak_area_times_UTC) #time to days
+            peak_area_times = date2num(peak_area_times_UTC) #time to days
      
             if diam_params == diameter_list[row_num] and diam_logi == diameter_list[row_num]:
                 line3, = ax1[row_num,0].plot(peak_area_times_UTC, logistic(peak_area_times,L,x0,k)+y_min, '--', color="gold",lw=1.2)
@@ -912,7 +853,7 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
         ax1[row_num,0].set_facecolor("lightgray")
         #ax1[row_num,0].xaxis.set_tick_params(rotation=30)
         ax1[row_num,0].ticklabel_format(axis="y",style="sci",scilimits=(0,0))
-        ax1[row_num,0].xaxis.set_major_formatter(mdates.DateFormatter("%H"))
+        ax1[row_num,0].xaxis.set_major_formatter(DateFormatter("%H"))
         #if row_num == 0:
         #    ax1[row_num,0].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
 
@@ -968,26 +909,10 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
         ax1[row_num,1].set_ylim(-50,threshold_deriv*1.8)
         ax1[row_num,1].set_facecolor("lightgray")
         #ax1[row_num,1].xaxis.set_tick_params(rotation=30) #rotating x-axis labels
-        ax1[row_num,1].xaxis.set_major_formatter(mdates.DateFormatter("%H"))
-        #if row_num == 0:
-        #    ax1[row_num,1].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
-        
-
-        """ Logarithmic derivate
-        #right axis
-        ax2 = ax1[row_num,1].twinx()
-        color2 = "green"
-        ax2.set_ylabel("log10(d(dN/dlogDp)dt)", color=color2) 
-        ax2.plot(x, y, color=color2,zorder=1)
-        ax2.tick_params(axis='y', labelcolor=color2)
-        ax2.set_yscale('log')
-
-        ax2.axhline(y=0.03, color='green', linestyle='--', lw=0.7, label="threshold = 0.03",zorder=1)
-        ax2.axhline(y=-0.03, color='green', linestyle='--', lw=0.7,zorder=1)
-        """
+        ax1[row_num,1].xaxis.set_major_formatter(DateFormatter("%H"))
 
 
-    ### FEW ADJUSTMENTS ###
+    ### ADJUSTMENTS ###
     #common titles
     ax1[0,0].set_title("Concentration", fontsize=10, fontweight="bold") 
     ax1[0,1].set_title("Derivative", fontsize=10, fontweight="bold")
@@ -1026,5 +951,4 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
                 ax1[row_num,1].axvline(x=i, color='black', linestyle='-', lw=0.8)
         new_day = day
     
-    #fig.tight_layout()
     print("Drawing diameter channel(s):",diameter_list)

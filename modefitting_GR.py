@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import timedelta
 from scipy.optimize import curve_fit
 from operator import itemgetter
-import matplotlib.dates as mdates
 import statsmodels.api as sm
 from matplotlib.dates import date2num
 
@@ -17,6 +16,7 @@ def closest(list, number):
         value.append(abs(number-i))
     return value.index(min(value))
 def cal_mape(x,y,popt):
+    '''Calculates mean absolute percentage error (%).'''
     y_predicted = linear(x, *popt)
     absolute_error = np.abs(y - y_predicted)
     mape = np.mean(absolute_error / y) * 100
@@ -24,9 +24,7 @@ def cal_mape(x,y,popt):
 def linear(x,k,b):
     return k*x + b
 def robust_fit(x,y):
-        """
-        Robust linear regression using statsmodels with HuberT weighting.
-        """
+        '''Robust linear regression using statsmodels with HuberT weighting.'''
         x_linear = np.linspace(np.min(x), np.max(x),num=len(y))
         rlm_HuberT = sm.RLM(y, sm.add_constant(x), M=sm.robust.norms.HuberT())
         rlm_results = rlm_HuberT.fit()
