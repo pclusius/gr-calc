@@ -5,9 +5,3 @@ The main.py file contains parameters that can be changed by the user. Please mak
 
 This tool uses Janne Lampilahti's aerosol functions package:
 https://github.com/jlpl/aerosol-functions
-
-# Installation
-Install from GitHub using pip
-```
-pip install git+https://github.com/nessukkakukka/GR-calculator.git
-```
