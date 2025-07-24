@@ -1,13 +1,11 @@
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from operator import itemgetter
 from datetime import timedelta
 from scipy.optimize import curve_fit
-import matplotlib.pyplot as plt
-from operator import itemgetter
-import statsmodels.api as sm
-from sklearn import linear_model
 from matplotlib.dates import num2date, date2num, DateFormatter
-from time import time
 
 
 #################### FUNCTIONS #####################
@@ -80,13 +78,12 @@ def robust_fit(x,y):
         return x_linear, y_rlm, y_params
 
 #################### METHODS #######################
-
 def find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold):
     '''
     Finds peak areas with derivative threshold.
     Returns dataframe with found peak areas.
+    
     mtd = maximum time difference between peaks to be considered the same horizontal peak area
-    mcd = minimum concentration difference between starting concentration and peak concentration
     '''
     #initialize variables
     df_peak_areas = pd.DataFrame()
@@ -274,7 +271,7 @@ def maximum_concentration(df,df_peak_areas):
                 df_mc = pd.concat([df_mc,new_row],ignore_index=True)
 
                 #save gaussian fit parameters and peak area edges for channel plotting 
-                fitting_params.append([diam,popt[0], popt[1]+x_min, popt[2]]) #[diam,a,mu,sigma]
+                fitting_params.append([diam,y_min,popt[0],popt[1]+x_min,popt[2]]) #[diam,ymin for scale,a,mu,sigma]
                 area_edges.append([diam,start_time,end_time]) #[diameter,start time, end time]
                                            
         except:
@@ -293,7 +290,7 @@ def appearance_time(df,mc_params,mc_area_edges):
     #logistic fit to every horizontal area of growth
     for mc_edge, mc_param in zip(mc_area_edges,mc_params):
         diam, start_time, end_time = mc_edge
-        diam, a, mu, sigma = mc_param
+        diam, _, a, mu, __ = mc_param
         
         #find values from the dataframe
         subset = df.loc[start_time:end_time,diam]
@@ -325,7 +322,7 @@ def appearance_time(df,mc_params,mc_area_edges):
                 else:
                     #save results to df
                     new_row = pd.DataFrame({"timestamp": [num2date(popt[1]+x_min).replace(tzinfo=None)], \
-                                            "diameter": [diam], "mid_concentration": [((popt[0]+y_min)+y_min)/2]})
+                                            "diameter": [diam], "mid_concentration": [popt[0]/2+y_min]})
                     df_at = pd.concat([df_at,new_row],ignore_index=True) #appearance time concentration (~50% maximum concentration), L/2
 
                     #save logistic fit parameters and peak area edges for channel plotting 
@@ -337,44 +334,54 @@ def appearance_time(df,mc_params,mc_area_edges):
                 continue
                           
     return df_at, fitting_params, area_edges
-def disappearance_time(df,mc_params,mc_area_edges):
-    '''Calculates disappearance times in peak areas'''
+def disappearance_time(df,df_at,mc_area_edges):
+    '''Calculates disappearance times in peak areas
+    
+    NOT FINALIZED
+    - fitting reversed logistic?
+    '''
     
     #create lists for results
-    df_at = pd.DataFrame()
-    fitting_params = []
-    area_edges = []
-    
-    #logistic fit to every horizontal area of growth
-    for mc_edge, mc_param in zip(mc_area_edges,mc_params):
-        diam, start_time, end_time = mc_edge
-        diam, a, mu, sigma = mc_param
+    df_dt = pd.DataFrame()
+
+    #find matching disappearance times for appearance times
+    for at_point in df_at.values:
+        x0_time, x0_diam, x0_conc = at_point[0], at_point[1], at_point[2]
+        channel_mc_areas = [area for area in mc_area_edges if area[0] == x0_diam]
+        mc_area_with_at = [area for area in channel_mc_areas if (area[1]<=x0_time<=area[2])][0]
+        area_diam, area_start, area_end = mc_area_with_at
+
+        max_i = np.argmax(df.loc[area_start:area_end,x0_diam].values)
+        max_ts = df.loc[area_start:area_end,x0_diam].index[max_i]
         
-        #find values from the dataframe
-        subset = df.loc[start_time:end_time,diam]
-        x = date2num(subset.index) #time in days
-        y = subset.values #concentration
-    
-        #rescaling for more stable fitting
-        x_min, y_min = min(x), min(y)
-        x = x - x_min
-        y = y - y_min
-        mu = mu - x_min
-        
-        
+        try: #next area after the current one with appearance time 
+            next_mc_area = [area for area in channel_mc_areas if area[1]>x0_time][0]
+            next_area_diam, next_area_start, next_area_end = next_mc_area
+            
+            next_max_i = np.argmax(df.loc[next_area_start:next_area_end,x0_diam].values)
+            next_max_ts = df.loc[next_area_start:next_area_end,x0_diam].index[next_max_i]
+        except IndexError:
+            next_max_ts = df.index[-1]
 
-
-        #save results to df
-        new_row = pd.DataFrame({"timestamp": [num2date(popt[1]+x_min).replace(tzinfo=None)], \
-                                "diameter": [diam], "mid_concentration": [((popt[0]+y_min)+y_min)/2]})
-        df_at = pd.concat([df_at,new_row],ignore_index=True) #appearance time concentration (~50% maximum concentration), L/2
-
-
-                          
-    return df_at, fitting_params, area_edges
+        #iterate over timesteps after maximum concentration
+        subset = df.loc[max_ts:,x0_diam]
+        for ts,conc in zip(subset.index,subset.values):
+            #stop if disappearance is not found before next area
+            if ts >= next_max_ts:
+                break
+            
+            #disappearance found!
+            if conc < x0_conc:
+                #save results to df
+                new_row = pd.DataFrame({"timestamp": [ts], \
+                                        "diameter": [x0_diam], "concentration": [conc]})
+                df_dt = pd.concat([df_dt,new_row],ignore_index=True)
+                break
+                      
+    return df_dt
 def init_methods(df,mpd,mdc,derivative_threshold):
     '''Initialize all functions.'''
-    
+
     #crop dataframe by allowed mdc (maximum diameter channel)
     df = df[df.columns[df.columns <= mdc]]
 
@@ -382,23 +389,12 @@ def init_methods(df,mpd,mdc,derivative_threshold):
     df_interpolated = df.interpolate(method='time')
     df_filtered = average_filter(df_interpolated,window=3)
     df_deriv = cal_derivative(df_filtered) 
-    
-    st = time()
-    print('\n'+'******** Finding peak areas! '+'\n')
     df_peak_areas, derivative_threshold, start_times_list, maxima_list = find_peak_areas(df_filtered,df_deriv,mpd,derivative_threshold)
-    print("Areas found! "+"(%s seconds)" % (time() - st))
-    
     
     #methods
-    st = time()
-    print('\n'+'******** Maximum concentration! '+'\n')
     df_mc, mc_params, mc_area_edges = maximum_concentration(df_interpolated,df_peak_areas)
-    print("Done! "+"(%s seconds)" % (time() - st))
-    
-    st = time()
-    print('\n'+'******** Appearance time! '+'\n')
     df_at, at_params, at_area_edges = appearance_time(df_interpolated,mc_params,mc_area_edges)
-    print("Done! "+"(%s seconds)" % (time() - st))
+    df_dt = disappearance_time(df_interpolated,df_at,mc_area_edges)
 
     #find points that are poorly defined
     time_edges = [df.index[0],df.index[1],df.index[-2],df.index[-1]]
@@ -423,10 +419,9 @@ def init_methods(df,mpd,mdc,derivative_threshold):
         [df_at['mid_concentration'][i] for i in i_to_remove_at]]
         if i_to_remove_at else [])
 
-    return df_mc, df_at, incomplete_mc_xyz, incomplete_at_xyz, mc_area_edges, at_area_edges, mc_params, at_params, derivative_threshold, start_times_list, maxima_list
+    return df_mc, df_at, df_dt, incomplete_mc_xyz, incomplete_at_xyz, mc_area_edges, at_area_edges, mc_params, at_params, derivative_threshold, start_times_list, maxima_list
 
 ################## GROWTH RATES ####################
-
 def points_in_existing_line(unfinished_lines, point, nearby_point=None):
     ''' Calculates in how many line a datapoint is.'''
     if nearby_point is None:
@@ -436,6 +431,7 @@ def points_in_existing_line(unfinished_lines, point, nearby_point=None):
         score += sum([1 for line in unfinished_lines if nearby_point in line])
     return score
 def extract_data(line,exclude_start=0,exclude_end=0):
+    '''Extracts wanted data points from line.'''
     return ([point[1] for point in line[exclude_start:len(line)-exclude_end]],  #x values
             [point[0] for point in line[exclude_start:len(line)-exclude_end]])  #y values
     
@@ -460,7 +456,6 @@ def find_growth(df,times,diams,mgsc,a,gret):
     unfinished_lines = []
     finalized_lines = []
     results_dict = {}
-    df_maes = pd.DataFrame()
     mtd = 2.5 #h, initial maximum time difference
     
     #iterate over each datapoint to find suitable pairs of mode fitting datapoints
@@ -616,7 +611,6 @@ def find_growth(df,times,diams,mgsc,a,gret):
                         break
                     unfinished_lines.append([datapoint,nearby_datapoint])
                 
-                #breakpoint()
                 break
 
     
@@ -625,39 +619,7 @@ def find_growth(df,times,diams,mgsc,a,gret):
     finalized_lines.extend(unfinished_lines)
     finalized_lines = [sorted(line, key=lambda x: x[1]) for line in finalized_lines] 
     
-    '''
-    #try splitting line into two parts from the middle to lower mae
-    for i, finalized_line in enumerate(finalized_lines):
-        if len(finalized_line) >= 7: #at least 7 datapoints needed  
-            middle_index = len(finalized_line)//2
-            line_1st_half = finalized_line[:middle_index+1] #overlap +1
-            line_2nd_half = finalized_line[middle_index:]
-            
-            #calculate if mae lowered in both halves
-            #whole line
-            x = [datapoint[1] for datapoint in finalized_line]
-            y = [datapoint[0] for datapoint in finalized_line] #diams
-            popt, pcov = curve_fit(linear, x, y)
-            mae = cal_mae(x,y,popt)
-            
-            #1st half
-            x = [datapoint[1] for datapoint in line_1st_half]
-            y = [datapoint[0] for datapoint in line_1st_half] #diams
-            popt, pcov = curve_fit(linear, x, y)
-            mae1 = cal_mae(x,y,popt)
-            
-            #2nd half
-            x = [datapoint[1] for datapoint in line_2nd_half]
-            y = [datapoint[0] for datapoint in line_2nd_half]
-            popt, pcov = curve_fit(linear, x, y)
-            mae2 = cal_mae(x,y,popt)
-            
-            if mae1 < mae and mae2 <= mae:
-                #remove the second half of current line and add it as its own line to finalized lines
-                finalized_lines[i] = line_1st_half
-                finalized_lines.append(line_2nd_half)  
-    '''
-    #robust fit, calculate mapes and growth rates
+    #robust fit, calculate maes and growth rates
     for i, finalized_line in enumerate(finalized_lines):
         x, y = extract_data(finalized_line) #x=diams,y=times
         x_fit, y_fit, params = robust_fit(x,y)
@@ -666,45 +628,32 @@ def find_growth(df,times,diams,mgsc,a,gret):
         
         fitted_points = [(time,diam) for diam,time in zip(x_fit,y_fit)]
         results_dict[f'line{str(i)}'] = {'points': finalized_line, 'fitted points': fitted_points, 'growth rate': GR, 'mae': mae}
-        
-        new_row = pd.DataFrame({"length": [len(x)], "mae": [mae]})
-        df_maes = pd.concat([df_maes,new_row],ignore_index=True)
-
-    df_maes.to_csv('./df_maes.csv', sep=',', header=True, index=True, na_rep='nan')
 
     return results_dict
-def filter_lines(lines):
-    '''
-    Filter datapoints of lines that are too short or
-    with too big of an error.
-    '''
-    #check length of datapoints for each line
-    filtered_lines = [line for line in lines if len(line) >= 4] #length of at least 4 datapoints
-    
-    #filter lines with too high of a growth rate
-    #???
-
-    return filtered_lines  
 def init_find(df,df_mc,df_AT,mgsc,a,gret):
-    #find consequtive datapoints
-    mc_data = find_growth(df,times=df_mc['timestamp'],diams=df_mc['peak_diameter'],mgsc=mgsc,a=a,gret=gret) #maximum concentration
-    at_data = find_growth(df,times=df_AT['timestamp'],diams=df_AT['diameter'],mgsc=mgsc,a=a,gret=gret) #appearance time
+    '''
+    Initialize functions.
+    Format of results:
+    results = {'line0': {'points': [(t1,d1),(t2,d2),...], 'fitted points': ..., 'growth rate': ... etc.}}
+    '''
     
-    #filter series of datapoints that are too short or with high deviation
-    mc_filtered = filter_lines(mc_data)
-    at_filtered = filter_lines(at_data)
+    #find consecutive datapoints
+    mc_results = find_growth(df,times=df_mc['timestamp'],diams=df_mc['peak_diameter'],mgsc=mgsc,a=a,gret=gret) #maximum concentration
+    at_results = find_growth(df,times=df_AT['timestamp'],diams=df_AT['diameter'],mgsc=mgsc,a=a,gret=gret) #appearance time
     
-    return mc_data, at_data 
+    return mc_results, at_results 
     
 #################### PLOTTING ######################
-
 def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and_maxima):
     '''
-    Plots chosen diameter channels over UTC time, with thresholds and gaussian fit.
+    Plots chosen diameter channels with various useful information.
+    
+    mpd = maximum peak difference
+    mdc = maximum diameter channel 
     '''   
     
     '''1 assemble all datasets'''
-    df_mc, df_at, incomplete_mc_xyz, incomplete_mc_xyz, peak_area_edges_gaussian, peak_area_edges_logistic, \
+    df_mc, df_at, df_dt, incomplete_mc_xyz, incomplete_mc_xyz, peak_area_edges_gaussian, peak_area_edges_logistic, \
         fitting_parameters_gaus, fitting_parameters_logi,  \
         threshold_deriv, start_times_list, maxima_list = init_methods(df,mpd,mdc,threshold_deriv)
 
@@ -808,15 +757,12 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
         
         #gaussian fit 
         for params, edges in zip(fitting_params_gaus,peak_area_edges_gaus):
-            diam_params, a, mu, sigma = params
+            diam_params, y_min, a, mu, sigma = params
             diam_gaus, start_time, end_time = edges 
-            
             peak_area_times_UTC = df_interpolated.loc[start_time:end_time,diam].index
-            peak_area_times = date2num(peak_area_times_UTC) #time to days
-            peak_area_concs = df_interpolated.loc[start_time:end_time,diam].values
             
             if diam_params == diameter_list[row_num] and diam_gaus == diameter_list[row_num]: #check that plotting happens in the right channel
-                line2, = ax1[row_num,0].plot(peak_area_times_UTC, gaussian(peak_area_times,a,mu,sigma)+min(peak_area_concs), '--', color="mediumturquoise",lw=1.2)
+                line2, = ax1[row_num,0].plot(peak_area_times_UTC, gaussian(date2num(peak_area_times_UTC),a,mu,sigma)+y_min, '--', color="mediumturquoise",lw=1.2)
                 lines_and_labels.add((line2,"gaussian fit"))
                 #ax2.plot(peak_area_times_UTC, gaussian(peak_area_times,a,mu,sigma), '--', color="mediumturquoise",lw=1.2)
         
@@ -824,12 +770,10 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
         for params, edges_logi in zip(fitting_params_logi,peak_area_edges_logi):
             diam_params, y_min, L, x0, k = params
             diam_logi, start_time_logi, end_time_logi = edges_logi
-
             peak_area_times_UTC = df_interpolated.loc[start_time_logi:end_time_logi,diam].index
-            peak_area_times = date2num(peak_area_times_UTC) #time to days
      
             if diam_params == diameter_list[row_num] and diam_logi == diameter_list[row_num]:
-                line3, = ax1[row_num,0].plot(peak_area_times_UTC, logistic(peak_area_times,L,x0,k)+y_min, '--', color="gold",lw=1.2)
+                line3, = ax1[row_num,0].plot(peak_area_times_UTC, logistic(date2num(peak_area_times_UTC),L,x0,k)+y_min, '--', color="gold",lw=1.2)
                 lines_and_labels.add((line3,"logistic fit"))
                 #ax2.plot(peak_area_times_UTC, logistic(peak_area_times,L,x0,k), '--', color="gold",lw=1.2)
 
@@ -903,8 +847,6 @@ def plot_channel(df,diameter_list_i,mpd,mdc,threshold_deriv,show_start_times_and
                 ax1[row_num,1].plot(time, conc, '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6)
                 #ax2.plot(time, conc, '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6)
 
-
-        
         ax1[row_num,1].set_xlim(df.index[1],df.index[-1])
         ax1[row_num,1].set_ylim(-50,threshold_deriv*1.8)
         ax1[row_num,1].set_facecolor("lightgray")

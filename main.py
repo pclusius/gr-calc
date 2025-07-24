@@ -4,67 +4,73 @@
 # automatic growth rate calculator #
 
 import pandas as pd
-import numpy as np
-from matplotlib import use, colors
-from matplotlib.dates import set_epoch, num2date, date2num
+import json
 import matplotlib.pyplot as plt
+from matplotlib import use, colors
+from matplotlib.dates import set_epoch, num2date
 from scipy.optimize import OptimizeWarning
-from sklearn.linear_model import RANSACRegressor
 from warnings import simplefilter
 from datetime import timedelta, datetime
 from time import time
-import statsmodels.api as sm
-import xarray as xr
-from adjustText import adjust_text
-from highlight_text import fig_text, ax_text
+from xarray import open_dataset
 
 '''
-assumptions:
-- datasets in json files (AVAA), separated by commas
-- time in days & diameters in X*e^Y format 
-  (e.g. "HYY_DMPS.d112e2" where diameter is 11.2nm)
-
 abbreviations:
 MF = mode fitting, MC = maximum concentration, AT = appearance time
 '''
 
 def main():
     ## DATASET ##
-    file_name = "Hyytiala_240401_250531.csv" #in the same folder as this code
-    start_date = "2024-09-20" #YYYY-MM-DD HH:MM:SS (time of day is optional)
-    end_date = "2024-09-22"   
+    file_name = "Beijing.nc" #in the same folder as this code
+    start_date = "2004-09-20" #YYYY-MM-DD HH:MM:SS (time of day is optional)
+    end_date = "2004-09-22"   
     
     ## PARAMETERS ##
     # mode fitting #
-    fit_multimodes = False #choose True if the fit_results -file does not yet exist for your time period (this process takes a few minutes)
-    mape_threshold_factor = 15 #a*x^(-1) (constant a that determines mean average error thresholds for different line lengths)
-    gr_error_threshold = 60 #% (precentage error of growth rates when adding new points to gr lines)
-    show_mape = False 
-    
+    fit_multimodes = False #True if the fit_results -file does not yet exist for your time period
+    mape_threshold_factor = 15 #a*x^(-1) (constant 'a' that determines mean average error thresholds for different line lengths)
+    gr_error_threshold_MF = 60 #% (precentage error of growth rates when adding new points to lines)
     
     # maximum concentration and appearance time #
-    #find_peak_areasc
-    maximum_peak_difference = 2 #hours (time between two peaks in smoothed data (window 3))
-    derivative_threshold = 200 #cm^(-3)/h (starting points of horizontal peak areas, determines what is a high concentration) 
-                               #(NOTICE: concentration diff is half of this between timesteps as the resolution is 30min)
-
+    #peak areas
+    maximum_peak_difference = 2 #hours (max time between two peaks in smoothed data (window 3))
+    derivative_threshold = 200 #cm^(-3)/h (starts of horizontal peak areas, determines the appearance of a possible event) 
+                                    #(NOTICE: concentration diff is half of this between timesteps as the resolution is 30min)
+    
     #find_growth
-    mae_threshold_factor = 1 #a*x^(-1) (constant a that determines mean average error thresholds for different line lengths)
-    gr_precentage_error_threshold = 60 #% (precentage error of growth rates when adding new points to gr lines)
+    mae_threshold_factor = 1 #a*x^(-1) (constant 'a' that determines mean average error thresholds for different line lengths)
+    gr_error_threshold_MCAT = 60 #% (precentage error of growth rates when adding new points to lines)
     maximum_diameter_channel = 60 #nm (highest diameter channel where growth lines are extended)
     maximum_growth_start_channel = 40 #nm (highest diameter channel where growth lines are allowed to start)
-
-    #channel plotting
-    init_plot_channel = False #True to plot channels
-    channel_indices = [18] #Indices of diameter channels, 1=small
-    show_start_times_and_maxima = True #True to show all possible start times of peak areas (black arrow) and maximas associated
     
+    #channel plotting (maximum concentration and appearance time)
+    channel_indices = [] #Indices of diameter channels (1=small), empty list ([]) if no channels plotted
+    show_start_times_and_maxima = True #True to show all possible start times of peak areas (black arrow) 
+                                       #and maximas associated (small black dot)
+    
+    
+    ## RESULTS ##
+    result_config = {
+        'plot_all_points': False, #plots all points for all methods
+        'plot_all_lines': False, #plots all lines 
+        'plot_all_events': False, #plots all events
+        'plot_final_events': True, #plots the final results
+        'print_final_event_info': False, #prints info about each final event on screen
+        'save_final_event_info': False, #saves info about each final event in a file
+        'print_ts_info': False, #prints info about each timestamp of an event
+        'save_ts_info': False, #saves info about timestamps in each event in a file
+        
+        'plot_event_info': False, #plots estimated growth rate and range for each event (white box)
+        'plot_DT': False #plots disappearance times (NOT FINISHED!)
+    }
+    
+    #Graph size and colorscale can be changed from the show_results function!
     
     ##############################################################################################
 
     ## LOAD DATA ##
-    df,df_plot = load_AVAA_data(file_name,start_date,end_date)
-    print(df)
+    df,df_plot = load_NC_data(file_name,start_date,end_date)
+    #print(df)
     
     ## CONFIGURATIONS ##
     use("Qt5Agg") #backend changes the UI for plotting
@@ -77,40 +83,47 @@ def main():
     import modefitting_GR
     import maxcon_appeartime
     
+    def log_step(message, start_time, step_num, total_steps=4):
+        print(f"{message} ({step_num}/{total_steps}) ({time() - start_time:.2f} seconds)")
+        return time()
+    print('\n'+'******** Processing mode fitting data'+'\n')
     st = time() #progress 
     
-    print('\n'+'******** Processing mode fitting data'+'\n')
+    # Step 1: Find mode fitting peaks
     df_MF_peaks = modefitting_peaks.find_peaks(df,file_name,start_date,fit_multimodes)
-    print("Peaks found! (1/5) "+"(%s seconds)" % (time() - st))
-    st = time()
+    st = log_step("Peaks found!", st, 1)
     
-    MF_gr_points, df_mapes = modefitting_GR.cal_modefit_growth(df_MF_peaks,a=mape_threshold_factor,gret=gr_error_threshold)
-    print("Growth periods found! (2/5) "+"(%s seconds)" % (time() - st))
-    st = time()
+    # Step 2: Find periods of growth
+    MF_gr_points = modefitting_GR.find_growth(df_MF_peaks,a=mape_threshold_factor,gret=gr_error_threshold_MF)
+    st = log_step("Growth periods found!", st, 2)
     
+    # Step 3: Find maximum concentration peaks and appearance times
     print('\n'+'******** Processing maximum concentration and appearance time data'+'\n')
-    df_MC, df_AT, incomplete_MC_xyz, incomplete_AT_xyz, mc_area_edges, at_area_edges, *_ = maxcon_appeartime.init_methods(df,mpd=maximum_peak_difference,mdc=maximum_diameter_channel,derivative_threshold=derivative_threshold)
-    print("Peaks found! (3/5) "+"(%s seconds)" % (time() - st))
-    st = time()
+    df_MC, df_AT, df_DT, incomplete_MC, incomplete_AT, mc_area_edges, *_ = maxcon_appeartime.init_methods(
+        df,mpd=maximum_peak_difference,mdc=maximum_diameter_channel,derivative_threshold=derivative_threshold)
+    st = log_step("Peaks found!", st, 3)
     
-    MC_gr_points, AT_gr_points = maxcon_appeartime.init_find(df,df_MC,df_AT,mgsc=maximum_growth_start_channel,a=mae_threshold_factor,gret=gr_precentage_error_threshold)
-    print("Growth periods found! (4/5) "+"(%s seconds)" % (time() - st))
-    st = time()
+    # Step 4: Find their growth periods
+    MC_gr_points, AT_gr_points = maxcon_appeartime.init_find(
+        df,df_MC,df_AT,mgsc=maximum_growth_start_channel,a=mae_threshold_factor,gret=gr_error_threshold_MCAT)
+    st = log_step("Growth periods found!", st, 4)
 
-    
-    ## PLOTTING ##
-    plot_results(file_name,df,df_plot,df_MF_peaks,MF_gr_points,df_mapes,df_MC,incomplete_MC_xyz,MC_gr_points,df_AT,incomplete_AT_xyz,AT_gr_points,mc_area_edges,at_area_edges,show_mape)
-    if init_plot_channel:
-        maxcon_appeartime.plot_channel(df_plot,channel_indices,maximum_peak_difference,maximum_diameter_channel,derivative_threshold,show_start_times_and_maxima)
-    print("Plotting done! (5/5) "+"(%s seconds)" % (time() - st))
+    # Step 5: Results
+    show_results(file_name,start_date,df,df_plot,df_MF_peaks,MF_gr_points,df_MC,incomplete_MC,MC_gr_points,
+                 df_AT,incomplete_AT,AT_gr_points,df_DT,mc_area_edges,result_config,maximum_growth_start_channel)
+    if channel_indices:
+        maxcon_appeartime.plot_channel(df_plot,channel_indices,maximum_peak_difference,
+                                       maximum_diameter_channel,derivative_threshold,show_start_times_and_maxima)
     plt.show()
 
 ##################################################################################################
 
- 
 def load_AVAA_data(file_name,start_date,end_date):
     '''
     Loads data downloaded from AVAA platforms (SmartSMEAR).
+    In case tar-data is not available.
+    Time in days & diameters in X*e^Y format 
+    (e.g. "HYY_DMPS.d112e2" where diameter is 11.2nm)
     '''
     def process_df(dataframe):
         #round data to nearest 30min and shift times by 15minutes forward
@@ -149,7 +162,7 @@ def load_AVAA_data(file_name,start_date,end_date):
     
     #select wanted time period
     df_plot = df.loc[start_date:end_date]
-    print(start_date,end_date)
+
     #include half day before and after for gr calculations
     try:
         start_date = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") - timedelta(hours=12)
@@ -157,8 +170,7 @@ def load_AVAA_data(file_name,start_date,end_date):
     except ValueError:
         start_date = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(hours=12)
         end_date = datetime.strptime(f'{end_date} 23:59:59', "%Y-%m-%d %H:%M:%S") + timedelta(hours=12)
-        
-    print(start_date,end_date)    
+         
     df = df.loc[start_date:end_date]
     
     df, *_ = process_df(df)
@@ -183,7 +195,7 @@ def load_NC_data(file_name,start_date,end_date):
         dataframe = dataframe.dropna(axis=1, how='all') #drop bins with no data
         return dataframe
     
-    ds = xr.open_dataset(file_name,engine='netcdf4')
+    ds = open_dataset(file_name,engine='netcdf4')
     data = ds['PNSD']
     
     #print time period
@@ -214,235 +226,248 @@ def load_NC_data(file_name,start_date,end_date):
         raise SystemExit
 
     return df, df_plot
-    
-def plot_results(file_name,df_data,df_plot,df_MF_peaks,MF_gr_points,df_mapes,df_MC,incomplete_MC_xyz,MC_gr_points,df_AT,incomplete_AT_xyz,AT_gr_points,mc_area_edges,at_area_edges,show_mape):
 
-    fig, ax = plt.subplots(figsize=(14, 5), dpi=200)
 
-    #original data
-    x, y = df_plot.index[0:], df_plot.columns
-    plt.pcolormesh(x, y, df_plot[0:].T, cmap='RdYlBu_r', zorder=0, norm=colors.LogNorm(vmin=1e1, vmax=5e4))
-    ax.set_yscale('log')
-    cbar = plt.colorbar(orientation='vertical', shrink=0.8, extend="max", pad=0.04)
-    cbar.set_label('dN/dlogDp', size=14)
-    cbar.ax.tick_params(labelsize=12)
-    
-    #plot line when day changes
-    start_time = df_plot.index[0]
-    end_time = df_plot.index[-1]
-    first_midnight = (start_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,df_MC,incomplete_MC,MC_gr_points,
+                 df_AT,incomplete_AT,AT_gr_points,df_DT,mc_area_edges,result_config,mgsc):
 
-    #vertical lines at midnights within the range
-    for day in pd.date_range(start=first_midnight, end=end_time, freq='D'):
-        plt.axvline(x=day, color='black', linestyle='-', lw=1)
+    import growth_events
+    all_events, final_events = growth_events.init_events(df_data,df_plot,MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,mgsc)
+    ts_info = growth_events.timestamp_info(all_events)
 
-    
-    #growth rates
-    plot_all_lines = False
-    if plot_all_lines:
-        all_diameters_MF, all_times_MC, all_times_AT = [], [], []
+    if any([result_config['plot_all_points'],result_config['plot_all_lines'],result_config['plot_all_events'],
+            result_config['plot_final_events'],result_config['plot_DT']]):
+        
+        fig, ax = plt.subplots(figsize=(14, 5), dpi=200) #change graph size here!
+
+        #colormap
+        x, y = df_plot.index[0:], df_plot.columns
+        plt.pcolormesh(x, y, df_plot[0:].T, cmap='RdYlBu_r', zorder=0, norm=colors.LogNorm(vmin=1e1, vmax=5e4)) #change colorscale here!
+        ax.set_yscale('log')
+        cbar = plt.colorbar(orientation='vertical', shrink=0.8, extend="max", pad=0.04)
+        cbar.set_label('dN/dlogDp', size=14)
+        cbar.ax.tick_params(labelsize=12)
+        
+        #line when day changes
+        start_time = df_plot.index[0]
+        end_time = df_plot.index[-1]
+        first_midnight = (start_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        for day in pd.date_range(start=first_midnight, end=end_time, freq='D'):
+            plt.axvline(x=day, color='black', linestyle='-', lw=1)
+
 
         #GROWTH RATES
-        #mode fitting
-        for i,line in enumerate(MF_gr_points.values()):
-            t, d = zip(*line['points']) #UTC, nm
-            
-            #dont plot lines outside of colormap
-            if any(df_plot.index[0] <= time <= df_plot.index[-1] for time in t):
-                t_fit, d_fit = zip(*line['fitted points'])
-                plt.plot(t_fit, d_fit,color='black',alpha=0.9,lw=2) #line
-                all_diameters_MF.extend(d) #for filtering points
+        #helper functions for plotting
+        def plot_line(t_fit, d_fit, gr, color, linestyle='solid',zorder=10):
+            plt.plot(t_fit, d_fit, color=color, lw=2, ls=linestyle, zorder=zorder)
+            mid_idx = len(t_fit) // 2
+            plt.annotate(f'{gr:.2f}', (t_fit[mid_idx], d_fit[mid_idx]),
+                        textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
+        def to_utc(times):
+            return [dt.replace(tzinfo=None) for dt in num2date(times)]
 
-                #annotation
-                if show_mape: #mape
-                    mape = df_mapes['mape'][i]
-                    midpoint_idx = len(t) // 2 
-                    plt.annotate(f'{mape:.2f}', (t[midpoint_idx], d[midpoint_idx]), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-                    ax.set_title(f'mean absolute error (MAE) unit: [hours]', loc='right', fontsize=8)
-                else: #growth rate
-                    gr = line['growth rate'] #nm/h
-                    plt.annotate(f'{gr:.2f}', (t[len(t)//2], d_fit[len(t)//2]),
-                                textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
+        all_diams_MF, all_times_MC, all_times_AT = [], [], []
+        
+        #all lines
+        if result_config['plot_all_lines']:
+            method_config = {
+                'MF': (MF_gr_points.values(), 'black', all_diams_MF, None),
+                'MC': (MC_gr_points.values(), 'white', all_times_MC, incomplete_MC),
+                'AT': (AT_gr_points.values(), 'green', all_times_AT, incomplete_AT)
+            }
 
-        #maximum concentration and appearance time
-        for points, incomplete_points, color in [(MC_gr_points.values(),incomplete_MC_xyz,"white"),(AT_gr_points.values(),incomplete_AT_xyz,"green")]:
-            for line in points:
-                t, d = zip(*line['points']) #days, nm
-
-                #dont plot lines outside of colormap
-                if any(df_plot.index[0] <= num2date(time).replace(tzinfo=None) <= df_plot.index[-1] for time in t): 
-                    if color == 'white':
-                        all_times_MC.extend([num2date(time).replace(tzinfo=None) for time in t]) #for filtering points
-                    else:
-                        all_times_AT.extend([num2date(time).replace(tzinfo=None) for time in t])
-                
+            for method, (lines, color, collector, incomplete_points) in method_config.items():
+                for line in lines:
+                    t, d = zip(*line['points'])
                     t_fit, d_fit = zip(*line['fitted points'])
-                    
-                    #change days to UTC and plot line
-                    t_UTC = [dt.replace(tzinfo=None) for dt in num2date(t)]
-                    t_fit_UTC = [dt.replace(tzinfo=None) for dt in num2date(t_fit)]
-                    
-                    #growth rate annotation
                     gr = line['growth rate'] #nm/h
-                    plt.annotate(f'{gr:.2f}', (t_fit_UTC[len(t_fit_UTC)//2], d_fit[len(t_fit_UTC)//2]),
-                                textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-                    
-                    #plot poorly defined lines as dotted lines and well defined as full lines
-                    incomplete_times = [point[0] for point in incomplete_points]
-                    
-                    for t in t_UTC:
-                        if t in incomplete_times:
-                            plt.plot(t_fit,d_fit,ls="dashed",color=color,lw=1.5,zorder=10)
-                            break
-                    else:
-                        plt.plot(t_fit,d_fit,color=color,lw=2,zorder=10)
-    else:
-        import growth_events
-        
-        #find event data
-        events = growth_events.detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_edges)
-        event_grs = growth_events.event_growth_rates(events)
 
-        all_diameters_MF, all_times_MC, all_times_AT = [], [], []
-        
-        if not events: #handle no events
-            mid_ts = len(df_plot.index)//2
-            mid_dp = len(df_plot.columns)//2
-            ax.text(df_plot.index[mid_ts],df_plot.columns[mid_dp],'No events found!', ha='center', va='center',size=8) 
-            
-        for event in events.values():
-            for line in event:
+                    if method == 'MF':
+                        plot_line(t_fit, d_fit, gr, color)
+                        collector.extend(d) #save for plotting points
+                    else: #MC or AT
+                        #check for lines at the edge of data period
+                        incomplete_times = [pt[0] for pt in incomplete_points]
+                        linestyle = 'dashed' if any(t in incomplete_times for t in to_utc(t_fit)) else 'solid'
+                        plot_line(t_fit, d_fit, gr, color, linestyle)
+                        collector.extend(to_utc(t)) 
+        else:
+            if result_config['plot_all_events']: #all events
+                events = all_events
+                print('Plotting all events...')
+            elif result_config['plot_final_events']: #final events
+                events = final_events
+                print('Plotting final events...')
                 
-                #MODE FITTING
-                if line['method'] == 'MF':
-                    t, d = zip(*line['points']) #UTC, nm
-                    
-                    #dont plot lines outside of colormap
-                    if any(df_plot.index[0] <= time <= df_plot.index[-1] for time in t):
-                        t_fit, d_fit = zip(*line['fitted points'])
-                        plt.plot(t_fit, d_fit,color='black',alpha=0.9,lw=2,zorder=5) #line
-                        all_diameters_MF.extend(d)
-                        
-                        #annotation
-                        if show_mape: #mape
-                            mape = df_mapes['mape'][i]
-                            midpoint_idx = len(t) // 2 
-                            plt.annotate(f'{mape:.2f}', (t[midpoint_idx], d[midpoint_idx]), textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-                            ax.set_title(f'mean absolute error (MAE) unit: [hours]', loc='right', fontsize=8)
-                        else: #growth rate
-                            gr = line['growth rate'] #nm/h
-                            plt.annotate(f'{gr:.2f}', (t[len(t)//2], d[len(t)//2]),
-                                        textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7) 
+            if any([result_config['plot_all_events'],result_config['plot_final_events']]):
                 
-                #MAXIMUM CONCENTRATION
-                if line['method'] == 'MC':
-                    t, d = zip(*line['points']) #days, nm
+                if not events: #handle no events
+                    mid_ts = len(df_plot.index)//2
+                    mid_dp = len(df_plot.columns)//2
+                    ax.text(df_plot.index[mid_ts],df_plot.columns[mid_dp],'No events found!', ha='center', va='center',size=8) 
                     
-                    if any(df_plot.index[0] <= num2date(time).replace(tzinfo=None) <= df_plot.index[-1] for time in t): 
+                incomplete_config = {
+                    'MC': ('white', all_times_MC, incomplete_MC),
+                    'AT': ('green', all_times_AT, incomplete_AT)
+                }
+                    
+                for event in events.values():
+                    for line in event['lines']:
+                        t, d = zip(*line['points'])
                         t_fit, d_fit = zip(*line['fitted points'])
-                        
-                        #change days to UTC and plot line
-                        t_UTC = [dt.replace(tzinfo=None) for dt in num2date(t)]
-                        t_fit_UTC = [dt.replace(tzinfo=None) for dt in num2date(t_fit)]
-                        all_times_MC.extend(t_UTC)
-                        
-                        #plot poorly defined lines as dotted lines and well defined as full lines
-                        incomplete_times_MC = [point[0] for point in incomplete_MC_xyz]
-                        
-                        for t in t_UTC:
-                            if t in incomplete_times_MC:
-                                plt.plot(t_fit,d_fit,ls="dashed",color='white',lw=1.5,zorder=10)
-                                break
-                        else:
-                            plt.plot(t_fit,d_fit,color='white',lw=2,zorder=10)
-                        
-                        #growth rate annotation
                         gr = line['growth rate'] #nm/h
-                        plt.annotate(f'{gr:.2f}', (t_fit_UTC[len(t_fit_UTC)//2], d_fit[len(t_fit_UTC)//2]),
-                                    textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
 
-                #APPEARANCE TIME
-                if line['method'] == 'AT':
-                    t, d = zip(*line['points']) #days, nm
-                    
-                    if any(df_plot.index[0] <= num2date(time).replace(tzinfo=None) <= df_plot.index[-1] for time in t): 
-                        t_fit, d_fit = zip(*line['fitted points'])
-                        
-                        #change days to UTC and plot line
-                        t_UTC = [dt.replace(tzinfo=None) for dt in num2date(t)]
-                        t_fit_UTC = [dt.replace(tzinfo=None) for dt in num2date(t_fit)]
-                        all_times_AT.extend(t_UTC)
-                        
-                        #plot poorly defined lines as dotted lines and well defined as full lines
-                        incomplete_times_AT = [point[0] for point in incomplete_AT_xyz]
-                        
-                        for t in t_UTC:
-                            if t in incomplete_times_AT:
-                                plt.plot(t_fit,d_fit,ls="dashed",color='green',lw=1.5,zorder=10)
-                                break
-                        else:
-                            plt.plot(t_fit,d_fit,color='green',lw=2,zorder=10)
-                        
-                        #growth rate annotation
-                        gr = line['growth rate'] #nm/h
-                        plt.annotate(f'{gr:.2f}', (t_fit_UTC[len(t_fit_UTC)//2], d_fit[len(t_fit_UTC)//2]),
-                                    textcoords="offset points", xytext=(0, 7), ha='center', fontsize=7)
-                    
-                    
-        #event information
-        for i in event_grs.index:
-            avg_gr = event_grs.loc[i]['avg growth rate']
-            min_gr = event_grs.loc[i]['min growth rate']
-            max_gr = event_grs.loc[i]['max growth rate']
-            mid_loc = event_grs.loc[i]['mid location']
+                        #MODE FITTING
+                        if line['method'] == 'MF':
+                            plot_line(t_fit, d_fit, gr, 'black', zorder=5)
+                            all_diams_MF.extend(d)
+                            
+                        #MAXIMUM CONCENTRATION & APPEARANCE TIME
+                        elif line['method'] in incomplete_config:
+                            color, collector, incomplete_points = incomplete_config[line['method']]
+                            incomplete_times = [pt[0] for pt in incomplete_points]
+                            linestyle = 'dashed' if any(t in incomplete_times for t in to_utc(t_fit)) else 'solid'
+                            plot_line(t_fit, d_fit, gr, color, linestyle)
+                            collector.extend(to_utc(t))
+        
+        #event information (white box)
+        if result_config['plot_event_info'] and not any([result_config['plot_all_events'],result_config['plot_final_events']]):
+            print('ERROR: Cannot plot event information as no events are plotted at the moment!')
+            raise SystemExit
+        elif result_config['plot_event_info']:        
+            for event_label in events:
+                info = events[event_label]
+                
+                #skip if only one line
+                if info['min growth rate'] == info['max growth rate']:
+                    continue
+                
+                #text formatting
+                sign = ' ' if info['max growth rate'] < 0 else ''
+                text = f"{info['avg growth rate']:.2f}nm/h ({info['min growth rate']:.2f}–{sign}{info['max growth rate']:.2f})"
+                
+                ax.text(
+                    x=info['mid location'][0],  # position on x-axis
+                    y=info['mid location'][1],  # position on y-axis
+                    s=text,
+                    fontsize=7,
+                    bbox=dict(edgecolor="none", facecolor="white", alpha=0.8, pad=1),
+                    zorder=20,
+                    ha='center', 
+                    va='center'
+                )
+        
+        #filter points not in a line
+        if not result_config['plot_all_points']:
+            df_MF_peaks = df_MF_peaks[df_MF_peaks['peak_diameter'].isin(all_diams_MF)]
+            df_MC = df_MC[df_MC['timestamp'].isin(all_times_MC)]
+            df_AT = df_AT[df_AT['timestamp'].isin(all_times_AT)]
             
-            #skip if only one line
-            if min_gr == max_gr:
-                continue
-            
-            #skip if outside of colormap
-            mid_date = num2date(mid_loc[0]).replace(tzinfo=None)
-            if not (df_plot.index[0] <= mid_date <= df_plot.index[-1]):
-                continue
-            
-            #text formatting
-            sign = ' ' if max_gr < 0 else ''
-            text = f'{avg_gr:.2f}nm/h ({min_gr:.2f}–{sign}{max_gr:.2f})'
-            
-            ax.text(
-                x=mid_loc[0],  # position on x-axis
-                y=mid_loc[1],  # position on y-axis
-                s=text,
-                fontsize=7,
-                bbox=dict(edgecolor="none", facecolor="white", alpha=0.8, pad=1),
-                zorder=20,
-                ha='center', 
-                va='center'
-            )
-            
-    #filter points not in a line
-    df_MF_peaks = df_MF_peaks[df_MF_peaks['peak_diameter'].isin(all_diameters_MF)]
-    df_MC = df_MC[df_MC['timestamp'].isin(all_times_MC)]
-    df_AT = df_AT[df_AT['timestamp'].isin(all_times_AT)]
+        #plot points
+        plt.plot(df_MF_peaks.index,df_MF_peaks['peak_diameter'],'.', alpha=0.8, color='black', mec='black', mew=0.4, ms=6, label='mode fitting')
+        plt.plot(df_MC['timestamp'], df_MC['peak_diameter'], '.', alpha=0.8, color='white',mec='black',mew=0.4, ms=6,label='maximum concentration') 
+        plt.plot(df_AT['timestamp'], df_AT['diameter'], '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6,label='appearance time')
+        if result_config['plot_DT']:
+            plt.plot(df_DT['timestamp'], df_DT['diameter'], '.', alpha=0.8, color='blue',mec='black',mew=0.4, ms=6,label='disappearance time',zorder=0)
     
-    #plot points
-    plt.plot(df_MF_peaks.index,df_MF_peaks['peak_diameter'],'.', alpha=0.8, color='black', mec='black', mew=0.4, ms=6, label='mode fitting',zorder=0)
-    plt.plot(df_MC['timestamp'], df_MC['peak_diameter'], '.', alpha=0.8, color='white',mec='black',mew=0.4, ms=6,label='maximum concentration',zorder=0) 
-    plt.plot(df_AT['timestamp'], df_AT['diameter'], '.', alpha=0.8, color='green',mec='black',mew=0.4, ms=6,label='appearance time',zorder=0)
+    
+        #adjustments to plot
+        plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
+        for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
+            legend_handle.set_markeredgewidth(0.5)
+            legend_handle.set_markeredgecolor("black")
+        
+        plt.xlim(df_plot.index[0],df_plot.index[-1])
+        plt.ylim(df_data.columns[0],df_data.columns[-1])
+        plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
+        plt.xlabel("time",fontsize=14) #add y-axis label
+        ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8)
+        plt.title(f"file name: {file_name}")
+    
+    
+    
+    # PRINTING #
+    if result_config['print_final_event_info']:
+        print('\n'+'*'*70)
+        print(f'Found {len(final_events)} growth events:')
+        
+        for i, event in enumerate(final_events.values(),start=1):
+            print(f'\n*Event{i}*')
+            
+            for line in event['lines']:
+                start_point = line['fitted points'][0]
+                end_point = line['fitted points'][-1]
+                gr = line['growth rate']
+                method = line['method']
+                
+                #change time from days to dates
+                start = (num2date(start_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(start_point[1],2))
+                end = (num2date(end_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(end_point[1],2))
+                
+                print(f"{start} → {end} | {gr:.2f}nm/h | {method}")
+            
+            #estimated event growth rate
+            info = final_events[f'event{i}']
+            
+            print(f"Estimated event growth rate: {info['avg growth rate']:.2f} ({info['min growth rate']:.2f}-{info['max growth rate']:.2f}) nm/h")
+            print(f"MAFE: {info['MAFE']:.3f}")
+            if event['num of lines'] > 2:
+                print('AFEs:')
+                for AFE in info['respective AFEs']:
+                    print(f'{AFE[0]}: {AFE[1]:.3f}')
+    
+    if result_config['print_ts_info']:
+        print('\n'+'*'*70)
+        print('Growth lines in each timestamp.')
+        
+        for event_label,stamps in ts_info.items():
+            print(f'\n{event_label}:')
+            
+            for ts_label,ts in stamps.items():
+                print(f'{ts_label}:')
+                
+                for line in ts['lines']:
+                    start_point = line['fitted points'][0]
+                    end_point = line['fitted points'][-1]
+                    gr = line['growth rate']
+                    method = line['method']
+                    
+                    #change time from days to dates
+                    start = (num2date(start_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(start_point[1],2))
+                    end = (num2date(end_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(end_point[1],2))
+                    
+                    print(f"{start} → {end} | {gr:.2f}nm/h | {method} ")
 
-    #adjustments to plot
-    plt.legend(fontsize=9,fancybox=False,framealpha=0.9)
-    for legend_handle in ax.get_legend().legend_handles: #change marker edges in the legend to be black
-        legend_handle.set_markeredgewidth(0.5)
-        legend_handle.set_markeredgecolor("black")
+                if not ts['lines']:
+                    print('No lines in this timestamp!')
+
+                if not any(val is None for val in [ts['avg growth rate'], ts['min growth rate'], ts['max growth rate']]):
+                    print(f"Estimated growth rate for timestamp: {ts['avg growth rate']:.2f} ({ts['min growth rate']:.2f}-{ts['max growth rate']:.2f}) nm/h")
     
-    plt.xlim(df_plot.index[0],df_plot.index[-1])
-    plt.ylim(df_data.columns[0],df_data.columns[-1])
-    plt.ylabel("diameter (nm)",fontsize=14) #add y-axis label
-    plt.xlabel("time",fontsize=14) #add y-axis label
-    ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8)
-    plt.title(f"{file_name}")
     
+    # SAVING #
+    if result_config['save_final_event_info']:
+        #change days to dates (type: str)
+        for event in final_events.values():
+            for line in event['lines']:
+                for key in ['points','fitted points']:
+                    line[key] = [(num2date(point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S'),point[1])
+                                 for point in line[key]]
+        
+        with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_final_events.json', 'w') as output_file:
+            json.dump(final_events, output_file, indent=2)
+
+    if result_config['save_ts_info']:
+        #change days to dates (type: str)
+        for event in ts_info.values():
+            for ts in event.values():
+                for line in ts['lines']:
+                    line['fitted points'] = [(num2date(point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S'),point[1])
+                                    for point in line['fitted points']]
+        
+        with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_ts_info.json', 'w') as output_file:
+            json.dump(ts_info, output_file, indent=2)
+
 
 if __name__ == "__main__":
     main()

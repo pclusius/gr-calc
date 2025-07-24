@@ -1,11 +1,11 @@
 import numpy as np
-import pandas as pd
+import statsmodels.api as sm
 from datetime import timedelta
 from scipy.optimize import curve_fit
 from operator import itemgetter
-import statsmodels.api as sm
 from matplotlib.dates import date2num
 
+################# USEFUL FUNCTIONS ##################
 def closest(list, number):
     '''
     Finds closest element in a list to a given value.
@@ -33,9 +33,10 @@ def robust_fit(x,y):
         y_rlm = rlm_results.predict(sm.add_constant(x_linear))
         y_params = rlm_results.params
         
-        #print("Statsmodel robus linear model results: \n",rlm_results.summary())
-        #print("\nparameters: ",rlm_results.params)
-        #print(help(sm.RLM.fit))
+        #for printing fitting results
+        # print("Statsmodel robus linear model results: \n",rlm_results.summary())
+        # print("\nparameters: ",rlm_results.params)
+        # print(help(sm.RLM.fit))
 
         return x_linear, y_rlm, y_params
 def points_in_existing_line(unfinished_lines, point, nearby_point=None):
@@ -47,17 +48,19 @@ def points_in_existing_line(unfinished_lines, point, nearby_point=None):
         score += sum([1 for line in unfinished_lines if nearby_point in line])
     return score
 def extract_data(line,exclude_start=0,exclude_end=0):
+    '''Extracts wanted data points from line.'''
     return (date2num([point[0] for point in line[exclude_start:len(line)-exclude_end]]),  #x values
             [point[1] for point in line[exclude_start:len(line)-exclude_end]])  #y values
 
+#####################################################
 def find_growth(df_peaks,a,gret):
     '''
     Finds nearby datapoints based on time and diameter constraints.
     Fits linear curve to test if datapoints are close enough.
     Returns lists with wanted times and diameters for plotting growth rates.
     
+    a = factor for MAPE threshold function a*x⁻¹
     gret = growth rate error threshold for filtering bigger changes in gr when adding new points to lines
-    mape = mean average precentage error
     ''' 
     #extract times and diameters from df
     times = df_peaks.index
@@ -70,7 +73,6 @@ def find_growth(df_peaks,a,gret):
     unfinished_lines = []
     finalized_lines = []
     results_dict = {}
-    df_mapes = pd.DataFrame()
 
     #iterate over each datapoint
     for i, datapoint in enumerate(data_sorted):
@@ -89,25 +91,17 @@ def find_growth(df_peaks,a,gret):
             closest_ts_points = [point for point in ts_points  \
                                  if point[1] >= base_low_diam_limit and point[1] <= base_high_diam_limit]
             if not closest_ts_points: #skip if no nearby datapoints in timestamp
-                # print("no nearby datapoints")
-                # breakpoint()
                 continue
             
             #closest datapoint next in list
-            if points_in_existing_line(unfinished_lines,datapoint) == 0:
+            if points_in_existing_line(unfinished_lines,datapoint) == 0: #datapoint not in any line
                 nearby_datapoint = tuple(min(closest_ts_points, key=lambda point: abs(point[1] - diam0)))
                 time1, diam1 = nearby_datapoint
-                # print("nearby datapoint with base diam diff")
             elif points_in_existing_line(unfinished_lines,datapoint) > 1: #datapoint in many lines (convergence)
-                # print("convergence")
-                # [print(line) for line in unfinished_lines if datapoint in line]
-                
                 converging_lines = [line for line in unfinished_lines if datapoint in line]
                 nearby_datapoint = tuple(min(closest_ts_points, key=lambda point: abs(point[1] - diam0)))
                 
-                #continue the line that best fits the next datapoint
-                #if len(closest_ts_points) == 1: #only if there is one nearby datapoint and at least one of the lines is longer than 2 datapoints
-                #minimize MAPE
+                #continue the line that best fits the next datapoint by minimizing MAPE
                 mapes = []
                 for line in converging_lines:
                     line_with_new_point = line + [nearby_datapoint]
@@ -117,16 +111,12 @@ def find_growth(df_peaks,a,gret):
                     mapes.append(mape)
 
                 min_mape_i = mapes.index(min(mapes))
-                #nearby_datapoint = tuple(closest_ts_points[0])
                 line_before = converging_lines[min_mape_i]
                 iii = unfinished_lines.index(line_before)
-                # breakpoint()
 
             else:
                 #minimize MAPE when choosing the new point
-                # print("nearby datapoint with stricter diam diff")
                 iii, line_before = [(i,line) for i,line in enumerate(unfinished_lines) if datapoint in line][0]
-                # print("line before:",line_before)
 
                 mapes = []
                 for point in closest_ts_points:
@@ -161,22 +151,16 @@ def find_growth(df_peaks,a,gret):
                     #if nearby datapoint is not in the diameter limit
                     if diam1 <= low_diam_limit or diam1 >= high_diam_limit:
                         unfinished_lines[iii] = line_before[1:] + [nearby_datapoint]
-                        # print("strict diam limit not met (shift one point forward)")
-                        # breakpoint()
                         break
 
 
             ### add new point to a line ###
-            if points_in_existing_line(unfinished_lines,datapoint) == 0:
+            if points_in_existing_line(unfinished_lines,datapoint) == 0: #not in any line
                 unfinished_lines.append([datapoint,nearby_datapoint])
-                # print("no points in existing line")
                 break
 
-            elif points_in_existing_line(unfinished_lines,datapoint) > 0:  
+            elif points_in_existing_line(unfinished_lines,datapoint) > 0: #in line(s)
                 unfinished_lines[iii] = line_before + [nearby_datapoint]
-                
-                # print("points in existing line")
-                # [print(line) for line in unfinished_lines if datapoint in line]
 
             #make sure datapoints in every line are sorted by time
             unfinished_lines = [list(set(line)) for line in unfinished_lines]
@@ -202,14 +186,9 @@ def find_growth(df_peaks,a,gret):
                 mape = cal_mape(x,y,popt)
 
                 if mape > mape_threshold:
-                    # print("mape surpassed (len <= 4), remove first point",line_after)
-
                     unfinished_lines[iii] = line_after[1:] #remove first point
-                    # breakpoint()
                     break
  
-                # print("mape ok! (len <= 4)",line_after)
-                # breakpoint()
                 break
             else:
                 #calculate growth rates of first 4 and last 4 points
@@ -232,9 +211,6 @@ def find_growth(df_peaks,a,gret):
 
 
                 if mape > mape_threshold:
-                    
-                    # print("mape surpassed, remove last point",line_after)
-                    
                     unfinished_lines = [line for line in unfinished_lines if line != line_after]
                     finalized_lines.append(line_after[:-1])
                     unfinished_lines.append([datapoint,nearby_datapoint]) #new line starts with end of previous one
@@ -252,20 +228,15 @@ def find_growth(df_peaks,a,gret):
                     #     unfinished_lines.append([datapoint,nearby_datapoint]) #new line starts with end of previous one
                     # else:
                     #     unfinished_lines[iii] = line_after[1:]
-                    # breakpoint()
                     break
                 
                 elif len(line_after) >= 4 and gr_error > gr_error_threshold:
-                    # print("gr error,remove last point",line_after)
-
                     #remove last point if threshold is exceeded
                     unfinished_lines = [line for line in unfinished_lines if line != line_after]
                     finalized_lines.append(line_after[:-1])
                     unfinished_lines.append([datapoint,nearby_datapoint])
-                    # breakpoint()
                     break
-  
-                # breakpoint()
+
                 break
     
     #add rest of the lines to finalized lines and by timestamp
@@ -282,32 +253,9 @@ def find_growth(df_peaks,a,gret):
         GR = params[1]/24 #nm/h
         
         fitted_points = [(time,diam) for time,diam in zip(x_fit,y_fit)]
+        finalized_line = [(time,diam) for time,diam in zip(x,y)] #to change time from timestamps to days
         results_dict[f'line{str(i)}'] = {'points': finalized_line, 'fitted points': fitted_points, 'growth rate': GR, 'mape': mape}
-        
-        new_row = pd.DataFrame({"length": [len(x)], "mape": [mape]})
-        df_mapes = pd.concat([df_mapes,new_row],ignore_index=True)
-        
-    df_mapes.to_csv('./df_mapes_modefitting.csv', sep=',', header=True, index=True, na_rep='nan')
 
-    return results_dict, df_mapes
-def filter_lines(combined):
-    '''
-    Filter datapoints of lines that are too short or
-    with too big of an error.
-    '''
-    
-    #filter lines shorter than 4
-    filtered_lines = [subpoints for subpoints in combined if len(subpoints) >= 1]
-    
-    #filter lines with too high of a growth rate
-    #???
-    
-    return filtered_lines
-def cal_modefit_growth(df,a,gret):
-    results_dict, df_mapes = find_growth(df,a=a,gret=gret)
-    print('Periods of growth found! (1/2)')
-    filtered_lines = filter_lines(results_dict)
-    print('Filtering done! (2/2)')    
- 
-    return results_dict, df_mapes
+    return results_dict
+
 

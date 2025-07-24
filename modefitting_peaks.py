@@ -2,7 +2,13 @@ import aerosol.fitting as af #janne's aerosol functions
 import json 
 import pandas as pd
 
+#####################################################
 def find_peaks(df,file,start_date,fit_multimodes=False):
+    '''
+    Finds mode fitting peaks using Janne Lampilahti's 
+    aerosol.fitting package, and saves them to a json file.
+    '''
+    
     file_name = file.split('.')[0]
     
     if fit_multimodes:

@@ -1,13 +1,48 @@
-from matplotlib.dates import set_epoch, num2date, date2num
-from datetime import timedelta
 import numpy as np
+from copy import deepcopy
 from collections import defaultdict
-import pandas as pd
+from matplotlib.dates import num2date, date2num
+from datetime import timedelta
 
+################# USEFUL FUNCTIONS ##################
 def flatten(xss):
     return [x for xs in xss for x in xs]
+def round_half_up(x):
+    if x % 1 == 0.5:
+        return int(x) + 1
+    else:
+        return round(x)
+def round_up_to_quarter(dt):
+    hour = dt.hour
+    minute = dt.minute
 
-def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_edges):
+    if minute < 15:
+        new_minute = 15
+    elif minute < 45:
+        new_minute = 45
+    else:
+        new_minute = 15
+        hour += 1
+        dt += timedelta(hours=1)
+
+    return dt.replace(hour=hour, minute=new_minute, second=0, microsecond=0)
+def round_down_to_quarter(dt):
+    hour = dt.hour
+    minute = dt.minute
+
+    if minute > 45:
+        new_minute = 45
+    elif minute > 15:
+        new_minute = 15
+    else:
+        new_minute = 45
+        hour -= 1
+        dt -= timedelta(hours=1)
+
+    return dt.replace(hour=hour, minute=new_minute, second=0, microsecond=0)
+
+################## FORMING EVENTS ###################
+def detect_events(df_data,MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,mgsc):
     '''Groups lines to the same growth event with multiple conditions.'''
 
     def group_lines(data):
@@ -59,7 +94,7 @@ def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_e
                 groups.append(group)
 
         # Step 3: Organize into dictionary
-        grouped_dict = {f"event{i}": group for i, group in enumerate(groups)}
+        grouped_dict = {f"event{i+1}": group for i, group in enumerate(groups)}
         return grouped_dict
     
     
@@ -122,53 +157,39 @@ def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_e
                 MF_line['method'] = 'MF'
                 pairs.append([MF_line, AT_line])
 
-    #any black lines with time length of more than 4h
+    #black lines with time length of more than 4h and in higher diameter channels
     for MF_line in MF_gr_points.values():
         MF_t, MF_d = zip(*MF_line['points'])
-        time_len = max(MF_t)-min(MF_t) 
+        time_len = max(MF_t)-min(MF_t)
+        t_diff_threshold = 4 #hours
         
-        if time_len > timedelta(hours=2):
+        if time_len >= t_diff_threshold/24 and any(d >= mgsc for d in MF_d):
             MF_line['method'] = 'MF'
             pairs.append([MF_line])
     
-    # #add connecting black lines to events
-    # for MF_line1 in MF_gr_points.values():
-    #     for MF_line2 in MF_gr_points.values():
-    #         MF_t1, MF_d1 = zip(*MF_line1['points'])
-    #         MF_t2, MF_d2 = zip(*MF_line2['points'])
-    #         gr1 = MF_line1['growth rate']
-    #         gr2 = MF_line2['growth rate']
-    #         abs_error = abs(gr1-gr2)
-            
-    #         #if any(t2 in MF_t1 for t2 in MF_t2):
-    #         if (MF_t1[0] == MF_t2[-1] or MF_t1[-1] == MF_t2[0]) and \
-    #             (MF_d1[0] == MF_d2[-1] or MF_d1[-1] == MF_d2[0]) and abs_error <= 2:
-    #                 MF_line1['method'] = 'MF'
-    #                 MF_line2['method'] = 'MF'
-    #                 pairs.append([MF_line1, MF_line2])
-
     #maximum concentration and appearance time
     for MC_line in MC_gr_points.values(): 
         for AT_line in AT_gr_points.values():
             MC_t, MC_d = zip(*MC_line['points'])
             AT_t, AT_d = zip(*AT_line['points'])
 
-            mc_areas_with_at_point = [area for area in mc_area_edges if area[0] in AT_d and any(list(AT_t) >= date2num(area[1])) and any(list(AT_t) <= date2num(area[2]))]
+            mc_areas_with_at_point = [area for area in mc_area_edges for t,d in zip(AT_t,AT_d)
+                                      if d == area[0] and t >= date2num(area[1]) and t <= date2num(area[2])]
             
             #find matching areas
-            matching_areas = [
-                area for area in mc_areas_with_at_point 
-                if area[0] in MC_d and any(list(MC_t) >= date2num(area[1])) and any(list(MC_t) <= date2num(area[2]))]
+            matching_areas = [area for area in mc_areas_with_at_point for t,d in zip(MC_t,MC_d)
+                              if d == area[0] and t >= date2num(area[1]) and t <= date2num(area[2])]
             
             #at least 2 points have to match
             if len(matching_areas) >= 2:
                 MC_line['method'] = 'MC'
                 AT_line['method'] = 'AT'
+
                 pairs.append([MC_line, AT_line])
     
     #group lines to events
     events = group_lines(pairs)
-
+    
 
     ######################################
     #2 mean absolute fractional error (MAFE) of white and black lines
@@ -193,16 +214,35 @@ def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_e
                 abs_error = np.abs(grs_copy - avg_gr)
                 MAFE = np.abs(2 / N * np.sum(abs_error) / avg_gr)
             # print(grs_copy)
-            #check if white lines start from under 6nm
+            #check if white lines start from first 5 diameter channels
             all_diams_MC = [d for line in event if line['method'] == 'MC' for d in list(zip(*line['points']))[1]]
 
-            if any(diam <= 6 for diam in all_diams_MC): 
+            
+            #in case of last two lines with the same method
+            remaining_lines = [event[i] for i in remaining_lines_i]
+            unique_methods = set([line['method'] for line in remaining_lines])
+         
+
+            if len(remaining_lines) == 2 and len(unique_methods) == 1:
+                remaining_lines_i = [] #remove all lines
+                break
+            
+                # #one is black = remove the one that isnt black
+                # elif any(line['method'] == 'MF' for line in remaining_lines):
+                #     idx_not_MF = next(i for i, line in enumerate(remaining_lines) if line['method'] != 'MF')
+                #     removed = remaining_lines_i.pop(idx_not_MF)
+                #     grs_copy = np.delete(grs_copy, idx_not_MF)
+                #     break
+
+            if any(diam <= df_data.columns[4] for diam in all_diams_MC): 
                 #check if thresholds are exceeded
                 # print("diams under 6nm")
                 # print('MAFE:',MAFE)
-                if MAFE <= 2/3:# and all(error <= 10 for error in abs_error):
+
+                if MAFE <= 1:# and all(error <= 10 for error in abs_error):
                     break
-                
+
+
                 biggest_abs_error_i = np.argmax(abs_error)
                 
                 # print("abs_error",abs_error,"biggest_abs_error_i",biggest_abs_error_i)
@@ -221,6 +261,7 @@ def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_e
             else:
                 #check if thresholds are exceeded
                 # print('MAFE:',MAFE)
+                #print(event)
                 if MAFE <= 3/2:# and all(error <= 10 for error in abs_error):
                     break
                 #break
@@ -233,8 +274,8 @@ def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_e
                 # #remove the value with the largest error
                 # removed_index = remaining_lines_i.pop(biggest_abs_error_i)
                 # grs_no_AT_copy = np.delete(grs_no_AT_copy, biggest_abs_error_i)
-
                 
+                #print(event)
                 biggest_abs_error_i = np.argmax(abs_error)
                 # print("abs_error",abs_error,"biggest_abs_error_i",biggest_abs_error_i)
                 # print("before:",grs_copy)
@@ -244,15 +285,16 @@ def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_e
                 
                 # print("after:",grs_copy)
                 # print()
+            
                 
                 #stop if only one growth rate remains
                 if len(grs_copy) == 1:
                     break
-
-        #add to dictionary
-        filtered_events[event_label] = [event[i] for i in remaining_lines_i]
-
-
+        
+        if remaining_lines_i:
+            #add to dictionary
+            filtered_events[event_label] = [event[i] for i in remaining_lines_i]
+    
     #2.5
     #if a black and white line remain, check that their areas overlap
     for event_label, event in filtered_events.items():
@@ -280,73 +322,293 @@ def detect_events(MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,at_area_e
                     ]
                     
                     if valid_points:
-                        valid_lines_i.extend([MF_line[0], MC_line[0]])
+                        new_lines = {MF_line[0], MC_line[0]} - set(valid_lines_i)
+                        valid_lines_i.extend(new_lines)
 
             #remove lines that don't overlap
             filtered_events[event_label] = [event[i] for i in valid_lines_i]
 
+    return filtered_events
+def split_events(filtered_events):
+    '''Determine final events.'''
     
-    ######################################
-    #3 appearance time lines associated with white lines and overlapping with black lines
-    # # filtered_MC_lines = [line for event in filtered_events.values() for line in event if line['method'] == 'MC']
-    # filtered_MF_lines = [line for event in filtered_events.values() for line in event if line['method'] == 'MF']
+    #split events to smaller bits
+    divided_events = {}
+    new_events = {}
+    
+    count = 1
+    for event_label, event in filtered_events.items():
+        remaining_lines_i = list(range(len(event)))  #track indices of remaining lines
+        MF_lines = [(i,line) for i,line in enumerate(event) if line['method'] == 'MF']
+        MC_lines = [(i,line) for i,line in enumerate(event) if line['method'] == 'MC']
+        AT_lines = [(i,line) for i,line in enumerate(event) if line['method'] == 'AT']
+        
+        for i,MC_line in MC_lines:
+            new_event = [MC_line]
+            new_event_i = [i]
+            MC_t, MC_d = zip(*MC_line['points'])
+            
+            #mf line with most time and diameter overlap
+            overlapping_points = []
+            for ii,MF_line in MF_lines:
+                MF_points_overlap = [i for i,MF_point in enumerate(MF_line['fitted points']) if min(MC_t) <= MF_point[0] <= max(MC_t) and min(MC_d) <= MF_point[1] <= max(MC_d)]
+                overlap_count = len(MF_points_overlap)
+                
+                #and at least 30% (rounded up) of points in either line overlap
+                if overlap_count >= round_half_up(len(MC_line['fitted points'])*0.3) or overlap_count >= round_half_up(len(MF_line['fitted points'])*0.3):
+                    overlapping_points.append(len(MF_points_overlap))
+                else:
+                    overlapping_points.append(0)
+            
+            if overlapping_points and not all(num == 0 for num in overlapping_points):
+                lines = [line for i,line in MF_lines]
+                best_MF_line = lines[np.argmax(overlapping_points)]
+                new_event.append(best_MF_line)
+                
+                idx = [i for i, line in enumerate(event) if line == best_MF_line][0]
+                new_event_i.append(idx)
+            #WHAT ABOUT WHEN ONLY GREEN AND BLACK???
+            
+            #at line with most diameter overlap
+            overlapping_points = []
+            for ii,AT_line in AT_lines:
+                AT_points_overlap = [i for i,AT_point in enumerate(AT_line['fitted points']) if min(MC_d) <= AT_point[1] <= max(MC_d)]
+                overlap_count = len(AT_points_overlap)
+                
+                #and at least 50% (rounded up) of points in either line overlap
+                if overlap_count >= round_half_up(len(MC_line['fitted points'])/2) or overlap_count >= round_half_up(len(AT_line['fitted points'])/2):
+                    overlapping_points.append(len(AT_points_overlap))
+                else:
+                    overlapping_points.append(0)
+            
+            if overlapping_points and not all(num == 0 for num in overlapping_points):
+                lines = [line for i,line in AT_lines]
+                best_AT_line = lines[np.argmax(overlapping_points)]
+                new_event.append(best_AT_line)
+                
+                idx = [i for i, line in enumerate(event) if line == best_AT_line][0]
+                new_event_i.append(idx)
+                
+            
+            if len(new_event) > 1:
+                new_events[f'event{len(filtered_events.values())+count}'] = new_event #add new event
+                remaining_lines_i = [] #remove all remaining lines
+                count += 1 #keeps track of event number
 
-    # # pairs = []
-     
-    # #add rest of the event lines to pairs
-    # #[pairs.append([line for line in event]) for event in filtered_events.values()]
-    # [pairs.append([line]) for line in filtered_MF_lines]
-    # filtered_events = group_lines(pairs)
-    
-    
-    #filter events
-    event_indices = list(range(len(filtered_events)))
+        divided_events[event_label] = [event[i] for i in remaining_lines_i]  
 
-    for i, event in enumerate(filtered_events.values()):
+    divided_events = divided_events | new_events
+    
+    return divided_events
+def filter_events(events,df_plot,mgsc):
+    '''Filter faulty events.'''
+
+    event_indices = [int(e.lstrip('event')) for e in events]
+        
+    for event_label, event in events.items():
         methods = [line['method'] for line in event]
         unique_methods = set(methods)
-
+        all_times = [t for line in event for t in list(zip(*line['fitted points']))[0]]
+        all_diams = [d for line in event for d in list(zip(*line['fitted points']))[1]]
+        
+        #events outside of the colormap
+        if all(df_plot.index[0] >= num2date(time).replace(tzinfo=None) or num2date(time).replace(tzinfo=None) >= df_plot.index[-1] for time in all_times):
+            event_indices.remove(int(event_label.lstrip('event')))
+        
         #only whites or only greens
-        if unique_methods == {'MC'} or unique_methods == {'AT'}:
-            event_indices.remove(i)
+        elif unique_methods == {'MC'} or unique_methods == {'AT'}:
+            event_indices.remove(int(event_label.lstrip('event')))
+        
+        #one black in lower diameters
+        elif len(event) == 1 and unique_methods == {'MF'} and all(d < mgsc for d in all_diams):
+            event_indices.remove(int(event_label.lstrip('event')))
 
-        if len(event) < 1:
-            event_indices.remove(i)
-
-    filtered_events = {f'event{i}': filtered_events[f'event{i}'] for i in event_indices if f'event{i}' in filtered_events}
-
-    return filtered_events
+        elif len(event) < 1:
+            event_indices.remove(int(event_label.lstrip('event')))
+            
+    events = {f'event{event_num+1}': events[f'event{i}'] for event_num,i in enumerate(event_indices) if f'event{i}' in events}
     
-def event_growth_rates(events):
+    return events
+
+############## GROWTH RATE ESTIMATION ###############
+#growth rate estimation
+def estimate_growth_rate(lines):
+    '''
+    Estimates growth rates of lines depending on 
+    their order and using a weighted average.
+    '''
+    #PAULI MUOKKAA LOPPUUN PETRIN KANSSA
+    #growth rates
+    growth_rates = [line['growth rate'] for line in lines]
+    mf_grs = [gr for i,gr in enumerate(growth_rates) if lines[i]['method'] == 'MF']
+    mc_grs = [gr for i,gr in enumerate(growth_rates) if lines[i]['method'] == 'MC']
+    at_grs = [gr for i,gr in enumerate(growth_rates) if lines[i]['method'] == 'AT']
+    
+    #classify event depending on line order
+    all_times_MC = [t for line in lines if line['method'] == 'MC' for t in list(zip(*line['fitted points']))[0]]
+    all_times_MF = [t for line in lines if line['method'] == 'MF' for t in list(zip(*line['fitted points']))[0]]
+    all_times_AT = [t for line in lines if line['method'] == 'AT' for t in list(zip(*line['fitted points']))[0]]
+    event_type = None
+    start_margin = 45/60/24  #45mins in days
+    
+    #missing black
+    if not all_times_MF: 
+        event_type = 1
+    
+    #missing white, green starts at same time or after black starts (with margin)
+    elif not all_times_MC: 
+        event_type = 2 if all_times_MF[0] - start_margin <= all_times_AT[0] else 1
+    
+    #missing green, white starts at same time or after black starts (with margin)
+    elif not all_times_AT: 
+        event_type = 2 if all_times_MF[0] - start_margin <= all_times_MC[0] else 1
+    
+    #all colors
+    else: 
+        #white and green start at same time or after black starts (within 1,5h margin)
+        if all_times_MF[0]-start_margin <= all_times_MC[0] and all_times_MF[0]-start_margin <= all_times_AT[0]:
+            event_type = 2
+        
+        #all other orders 
+        elif np.mean(all_times_AT) <= np.mean(all_times_MC) and np.mean(all_times_MC) <= np.mean(all_times_MF) or \
+            np.mean(all_times_MC) <= np.mean(all_times_AT) and np.mean(all_times_AT) <= np.mean(all_times_MF) or \
+            np.mean(all_times_MC) <= np.mean(all_times_MF) and np.mean(all_times_MF) <= np.mean(all_times_AT) or \
+            np.mean(all_times_AT) <= np.mean(all_times_MF) and np.mean(all_times_MF) <= np.mean(all_times_MC):
+            event_type = 1
+
+    #different weights for averages depending on situation
+    if event_type == 1: 
+        mf_weight, mc_weight, at_weight = 1, 1, 1 #all just as important
+    elif event_type == 2:
+        mf_weight, mc_weight, at_weight = 2, 1, 1 #black more important
+
+    #WHEIGHTED AVERAGE
+    weighted_avg_gr = (sum(mf_weight*mf_grs) + sum(mc_weight*mc_grs) + sum(at_weight*at_grs)) \
+                            /(mf_weight*len(mf_grs)+mc_weight*len(mc_grs)+at_weight*len(at_grs))
+    min_gr = min(growth_rates)
+    max_gr = max(growth_rates)
+    
+    return weighted_avg_gr, min_gr, max_gr
+def add_event_info(events):
     '''
     Calculates growth rates for growth events and includes an estimate of 
-    the reliability of the result. 
+    the reliability of the result. Classifies events to different situations 
+    that affect the weighted average.
     '''
-    
-    event_grs = pd.DataFrame()
-    
-    for i, (event_label,lines) in enumerate(events.items()):
-        #growth rates
+
+    for i, lines in enumerate(events.values()):
+        #estimate growth rates
+        weighted_avg_gr, min_gr, max_gr = estimate_growth_rate(lines)
+        
+        #calculate AFE (absolute fractional error) for the event
         growth_rates = [line['growth rate'] for line in lines]
-        #WHEIGHTED AVERAGE??
-        avg_gr = np.average(growth_rates)
-        min_gr = min(growth_rates)
-        max_gr = max(growth_rates)
+        N = len(growth_rates)
+            
+        if N == 2:
+            abs_error = [np.abs(growth_rates[0]-growth_rates[1])]
+            MAFE = np.abs(2 * abs_error[0] / (growth_rates[0]+growth_rates[1]))
+        else:
+            abs_error = np.abs(growth_rates - weighted_avg_gr)
+            MAFE = np.abs(2 / N * np.sum(abs_error) / weighted_avg_gr)
+            
+        #and all lines separately
+        AFEs = []
+        method_pairs = {('MC', 'MF'), ('AT', 'MF'), ('AT', 'MC')}
+
+        for ii, line1 in enumerate(lines):
+            for j, line2 in enumerate(lines):
+                if ii >= j:
+                    continue  #avoid duplicate or self-comparison
+
+                method1 = line1['method']
+                method2 = line2['method']
+                pair = (method1, method2)
+                reversed_pair = (method2, method1)
+                
+                if pair in method_pairs or reversed_pair in method_pairs:
+                    gr1 = line1['growth rate']
+                    gr2 = line2['growth rate']
+                    AFE = np.abs(2 * np.abs(gr1 - gr2) / (gr1 + gr2))
+                    AFEs.append((f'{method1} & {method2}', AFE))
+
         
         #average location in PSD
         datapoints = flatten([line['points'] for line in lines])
-        all_t_days = [date2num(point[0]) if isinstance(point[0],pd.Timestamp) else point[0] for point in datapoints]
+        all_t = [point[0] for point in datapoints]
         all_d = [point[1] for point in datapoints]
-        mid_x = np.average(all_t_days)
+        mid_x = np.average(all_t)
         mid_y = np.average(all_d)
         
-        #add to dataframe
-        new_row = pd.DataFrame({"avg growth rate": [avg_gr], "min growth rate": [min_gr], "max growth rate": [max_gr],
-                                "mid location": [(mid_x,mid_y)]})                           
-        event_grs = pd.concat([event_grs,new_row],ignore_index=True)
+        #format dictionary differently and add info
+        events[f'event{str(i+1)}'] = {'lines': lines}
+        events[f'event{str(i+1)}'].update({"avg growth rate": weighted_avg_gr, "min growth rate": min_gr, "max growth rate": max_gr,
+                                          "MAFE": MAFE, "respective AFEs": AFEs, "num of lines": len(growth_rates), "mid location": (mid_x,mid_y)})
+        
+    return events    
+def init_events(df_data,df_plot,MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,mgsc):
+    '''
+    Initialize all functions to calculate final results. 
+    Format of resulting dictinary: 
+    events = {'event1': {'lines': [...], 'avg growth rate': ..., etc. }, 'event2': {etc.}}
+    '''
+    
+    #find events
+    all_events = detect_events(df_data,MF_gr_points,MC_gr_points,AT_gr_points,mc_area_edges,mgsc)
+    final_events = split_events(all_events)
+    
+    #filter events
+    all_events = filter_events(all_events,df_plot,mgsc)
+    final_events = filter_events(final_events,df_plot,mgsc)
 
-    return event_grs
+    #add more info
+    all_events = add_event_info(all_events)
+    final_events = add_event_info(final_events)
+
+    return all_events, final_events
         
+def timestamp_info(events):
+    '''
+    Similar to event_info, but for every timestamp in an event.
+    Format of results: 
+    ts_info = {'event1': {ts1: {'lines': [...], 'avg growth rate': ..., etc. }, ts2: etc.}, 'event2': {etc.}}
+    '''
+    
+    ts_info = {}
+
+    for event_label,event in events.items():
+        #create a timestamp list with rounded times to :15 or :45
+        all_ts = [t for line in event['lines'] for t in list(zip(*line['fitted points']))[0]]
+
+        #convert to datetime and round
+        min_ts = num2date(min(all_ts)).replace(tzinfo=None)
+        max_ts = num2date(max(all_ts)).replace(tzinfo=None)
+        min_ts = round_up_to_quarter(min_ts)
+        max_ts = round_down_to_quarter(max_ts)
+
+        even_ts = []
+        while min_ts <= max_ts:
+            even_ts.append(min_ts)
+            min_ts += timedelta(minutes=30)
+
+        stamps = {}
+        for ts in even_ts:
+            #lines in this timestamp
+            lines_in_ts = [deepcopy(line) for line in event['lines'] if min(list(zip(*line['fitted points']))[0]) <= date2num(ts) <= max(list(zip(*line['fitted points']))[0])]
+            [line.pop('points',None) for line in lines_in_ts] #delete unnecessary info (points)
+            
+            #estimate average growth rate
+            if len(lines_in_ts) >= 2:
+                weighted_avg_gr, min_gr, max_gr = estimate_growth_rate(lines_in_ts)
+            else:
+                weighted_avg_gr, min_gr, max_gr = None, None, None
+                
+            #store info
+            stamps.update({ts.strftime('%Y-%m-%d %H:%M:%S'): 
+                                {'lines': [deepcopy(line) for line in lines_in_ts], 
+                                "avg growth rate": weighted_avg_gr, "min growth rate": min_gr, "max growth rate": max_gr}, 
+                           })
         
-        
-         
+        #fill dictonary
+        ts_info[event_label] = stamps
+      
+    return ts_info
