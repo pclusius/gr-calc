@@ -34,7 +34,7 @@ def safe_fit_row(df_row, max_retries=5, n_modes=None, n_samples=10000, fallback_
 
     except Exception as e:
         raise ValueError(f"Invalid input data: {str(e)}") from e
-    # np.random.seed(42)
+    np.random.seed(42)
     # Adaptive retry configuration
     retry_delay = 0.1  # Initial delay in seconds
     max_delay = 2.0  # Maximum delay between retries

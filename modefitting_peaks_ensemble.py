@@ -9,7 +9,7 @@ from sklearn.cluster import KMeans
 
 
 #####################################################
-def find_peaks(df,file,start_date,fit_multimodes=False,new_fitting_functions = False, n_samples=10000,
+def find_peaks(df,file,start_date,fit_multimodes=False, n_samples=10000,
                 ensemble_size=30,method=0,ens_number=None):
     '''
     Finds mode fitting peaks using Janne Lampilahti's
@@ -32,13 +32,13 @@ def find_peaks(df,file,start_date,fit_multimodes=False,new_fitting_functions = F
                 fits.append(json.load(file))
     except FileNotFoundError:
         for i in loopover:
-            if new_fitting_functions:
-                fit_results = safe_fit_df(df,n_samples=n_samples)
-                print('Using new fitting')
-                # bp()
-            else:
-                fit_results = af.fit_multimodes(df)
-                print('Using old fitting')
+            fit_results = safe_fit_df(df,n_samples=n_samples)
+            # if new_fitting_functions:
+            #     print('Using new fitting')
+            #     # bp()
+            # else:
+            #     fit_results = af.fit_multimodes(df)
+            #     print('Using old fitting')
             # XXX NEW functions
 
             #write json data to a file
@@ -61,12 +61,12 @@ def find_peaks(df,file,start_date,fit_multimodes=False,new_fitting_functions = F
 
     for bfr in fits_mean[0]:
         # bp()
-        if new_fitting_functions:
-            import numpy as np
-            bp()
-            timestamp = bfr[0][0]
-        else:
-            timestamp = bfr
+        # if new_fitting_functions:
+        #     import numpy as np
+        #     bp()
+        timestamp = bfr[0][0]
+        # else:
+        #     timestamp = bfr
         ts = timestamp['time']
         # peak_diams = timestamp['peak_diams']
 

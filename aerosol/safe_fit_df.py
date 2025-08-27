@@ -21,7 +21,7 @@ def safe_fit_df(df, max_retries=5, n_modes=None, n_samples=10000):
 
     safe_results = []
     safe_timings = []
-    # np.random.seed(42)
+    np.random.seed(42)
     for i in range(len(df)):
         start_time = time.time()
 

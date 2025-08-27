@@ -5,7 +5,7 @@ import pandas as pd
 from pdb import set_trace as bp
 
 #####################################################
-def find_peaks(df,file,start_date,fit_multimodes=False,new_fitting_functions = False, n_samples=10000):
+def find_peaks(df,file,start_date,fit_multimodes=False, n_samples=10000):
     '''
     Finds mode fitting peaks using Janne Lampilahti's
     aerosol.fitting package, and saves them to a json file.
@@ -20,13 +20,13 @@ def find_peaks(df,file,start_date,fit_multimodes=False,new_fitting_functions = F
         with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json') as file:
             fits = json.load(file)
     except FileNotFoundError:
-        if new_fitting_functions:
-            fit_results = safe_fit_df(df,n_samples=n_samples)
-            print('Using new fitting')
-            # bp()
-        else:
-            fit_results = af.fit_multimodes(df)
-            print('Using old fitting')
+        fit_results = safe_fit_df(df,n_samples=n_samples)
+        # if new_fitting_functions:
+        #     print('Using new fitting')
+        #     # bp()
+        # else:
+        #     fit_results = af.fit_multimodes(df)
+        #     print('Using old fitting')
         # XXX NEW functions
 
         #write json data to a file
@@ -41,11 +41,11 @@ def find_peaks(df,file,start_date,fit_multimodes=False,new_fitting_functions = F
     #making a dataframe from json file
     rows_list = []
     for bfr in fits[0]:
-        bp()
-        if new_fitting_functions:
-            timestamp = bfr[0][0]
-        else:
-            timestamp = bfr
+        # bp()
+        # if new_fitting_functions:
+        timestamp = bfr[0][0]
+        # else:
+        #     timestamp = bfr
         ts = timestamp['time']
         peak_diams = timestamp['peak_diams']
 
