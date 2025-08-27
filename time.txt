@@ -1,0 +1,37 @@
+netcdf Beijing {
+dimensions:
+	bin = 61 ;
+	time = 17088 ;
+variables:
+	double PNSD(time, bin) ;
+		PNSD:long_name = "Mean particle number size distribution, dN/dlog10(Dp), over one hour within [time-15min, time+15min)" ;
+		PNSD:unit = "cm-3" ;
+		PNSD:_FillValue = NaN ;
+	int time(time) ;
+		time:long_name = "local time" ;
+		time:time_zone = "UTC+8" ;
+		time:units = "minutes since 2004-03-10 00:15:00" ;
+		time:calendar = "proleptic_gregorian" ;
+	double Ntotal(time) ;
+		Ntotal:long_name = "Mean total particle number concentration over one hour within [time-15min, time+15min)" ;
+		Ntotal:unit = "cm-3" ;
+		Ntotal:_FillValue = NaN ;
+	double bin(bin) ;
+		bin:long_name = "particle size bins" ;
+		bin:unit = "m" ;
+		bin:bin_min = "3e-09 m" ;
+		bin:bin_max = "2.5141879e-05 m" ;
+		bin:dlog10Dp = "0.05" ;
+		bin:_FillValue = NaN ;
+
+// global attributes:
+		:station = "Beijing" ;
+		:latitude = "39.9 N" ;
+		:longitude = "116.4 E" ;
+		:altitude = "50.0 m" ;
+		:abbreviation = "BEI" ;
+		:country = "China" ;
+		:environment = "Urban" ;
+		:device = "dmps" ;
+		:creator = "Putian Zhou (putian.zhou@helsinki.fi)" ;
+}
