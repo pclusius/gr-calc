@@ -30,7 +30,8 @@ def find_peaks(df,file,start_date,fit_multimodes=False, n_samples=10000):
     #making a dataframe from json file
     rows_list = []
     for bfr in fits[0]:
-
+        if bfr is None:
+            continue
         timestamp = bfr[0][0]
         ts = timestamp['time']
         peak_diams = timestamp['peak_diams']
