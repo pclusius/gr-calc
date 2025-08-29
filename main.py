@@ -83,6 +83,8 @@ channel_indices = [] #Indices of diameter channels (1=small), empty list ([]) if
 show_start_times_and_maxima = True #True to show all possible start times of peak areas (black arrow)
 #and maximas associated (small black dot)
 
+bufferhours = 4 # hours to buffer before and after
+
 
 
 ##############################################################################################
@@ -155,7 +157,7 @@ def main(ens_number=None):
     if args.close_figs:
         plt.close()
     elif args.ensemble_method==0:
-        # plt.ion()
+        plt.ion()
         plt.show()
     else:
         plt.close()
@@ -171,6 +173,7 @@ def load_AVAA_data(file_name,start_date,end_date):
     Time in days & diameters in X*e^Y format
     (e.g. "HYY_DMPS.d112e2" where diameter is 11.2nm)
     '''
+
     def process_df(dataframe):
         #round data to nearest 30min and shift times by 15minutes forward
         original_timestamps = dataframe.index.copy()
@@ -211,11 +214,11 @@ def load_AVAA_data(file_name,start_date,end_date):
 
     #include half day before and after for gr calculations
     try:
-        start_date = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") - timedelta(hours=12)
-        end_date = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S") + timedelta(hours=12)
+        start_date = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") - timedelta(hours=bufferhours)
+        end_date = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S") + timedelta(hours=bufferhours)
     except ValueError:
-        start_date = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(hours=12)
-        end_date = datetime.strptime(f'{end_date} 23:59:59', "%Y-%m-%d %H:%M:%S") + timedelta(hours=12)
+        start_date = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(hours=bufferhours)
+        end_date = datetime.strptime(f'{end_date} 23:59:59', "%Y-%m-%d %H:%M:%S") + timedelta(hours=bufferhours)
 
     df = df.loc[start_date:end_date]
 
@@ -251,17 +254,22 @@ def load_NC_data(file_name,start_date,end_date):
     last_time = ds['time'].values[-1].astype('M8[s]').astype(datetime)
     print("start of period in the datafile:",first_time.strftime("%Y-%m-%d %H:%M"))
     print("end of period in the datafile:",last_time.strftime("%Y-%m-%d %H:%M"))
+    earlier = first_time>(pd.to_datetime(start_date)-pd.Timedelta(f'{bufferhours}h'))
+    later = last_time<(pd.to_datetime(start_date)+pd.Timedelta(f'{bufferhours}h'))
+    if any([earlier,later]):
+        print(f'The selected data does not contain the whole period.')
+        exit('Check the dates above and use them. You can also use --start and --duration')
 
     #select time period
     data_plotting = data.sel(time=slice(start_date, end_date)) #plotting
 
     #include half day before and after for gr calculations
     try:
-        start_date = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") - timedelta(hours=4)
-        end_date = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S") + timedelta(hours=4)
+        start_date = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") - timedelta(hours=bufferhours)
+        end_date = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S") + timedelta(hours=bufferhours)
     except ValueError:
-        start_date = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(hours=4)
-        end_date = datetime.strptime(f'{end_date} 23:59:59', "%Y-%m-%d %H:%M:%S") + timedelta(hours=4)
+        start_date = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(hours=bufferhours)
+        end_date = datetime.strptime(f'{end_date} 23:59:59', "%Y-%m-%d %H:%M:%S") + timedelta(hours=bufferhours)
 
     data_subset = data.sel(time=slice(start_date, end_date))
 
@@ -602,6 +610,7 @@ if __name__ == "__main__":
     parser.add_argument('--save_ts_info', action='store_true',help = 'saves info about timestamps in each event in a file')
     parser.add_argument('--plot_event_info', action='store_true',help = 'plots estimated growth rate and range for each event (white box) XXX')
     # parser.add_argument('--plot_DT', action='store_true',help = 'plots disappearance times (NOT FINISHED!)')
+    parser.add_argument('--duration','-d', default=0, type=int,help = 'Lenght of days to consider, starting from --start. if zero, --end is used (default 0)')
 
     ## Parse arguments
     args = parser.parse_args()
@@ -612,7 +621,10 @@ if __name__ == "__main__":
     file_name = args.file
     start_date = args.start
     end_date = args.end
+    duration = args.duration
 
+    if duration>0:
+        end_date = (pd.to_datetime(start_date)+pd.Timedelta(f'{duration-1}D')).strftime('%Y-%m-%d')
     # if args.fitting == 'old':
     #     new_fitting_functions = False
     # elif args.fitting == 'new':
@@ -625,7 +637,21 @@ if __name__ == "__main__":
 
     ts_info,df_MF_peaks = main()
 
-
+    import print_event
+    fout = open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_event_Summary.txt', 'w')
+    # for j in range(1,len(ts_info)+1):
+    #     print('event:', j, print_event.print_event(ts_info, j))
+    print('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          ')
+    fout.write('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          \n')
+    for j in range(1,len(ts_info)+1):
+        Dic = print_event.print_event(ts_info,j)
+        # print()
+        print(f'# event{j}')
+        fout.write(f'# event{j}'+'\n')
+        for k in Dic.keys():
+            print(k+'   '+Dic[k])
+            fout.write(k+'   '+Dic[k]+'\n')
+    fout.close()
     #
     # # bp()
     # if args.ensemble==1 or args.ensemble_method==0:
