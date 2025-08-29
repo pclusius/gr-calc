@@ -14,7 +14,8 @@ from datetime import timedelta, datetime
 from time import time
 from xarray import open_dataset
 import argparse
-from pdb import set_trace as bp
+# from pdb import set_trace as bp
+import print_event
 
 default_file_name = "Beijing.nc" #in the same folder as this code, unless -d or --data flag was pointing to another directory
 default_start_date = "2004-09-20" #YYYY-MM-DD HH:MM:SS (time of day is optional)
@@ -44,7 +45,8 @@ result_config = {
     'save_ts_info': False, #saves info about timestamps in each event in a file
     'plot_event_info': False, #plots estimated growth rate and range for each event (white box) XXX
     'plot_DT': False, #plots disappearance times (NOT FINISHED!)
-    'ens_number': None #Inital value, gets updated, don't change!)
+    'ens_number': None, #Inital value, gets updated, don't change!)
+    'auto_limits': True #Inital value, gets updated, don't change!)
 }
 
 #Graph size and colorscale can be changed from the show_results function!
@@ -93,7 +95,7 @@ def main(ens_number=None):
     ## LOAD DATA ##
 
     df,df_plot = load_NC_data(file_name,start_date,end_date)
-    if args.auto_limits:
+    if result_config['auto_limits']:
         plot_config['vmin'] = max(1,   np.min(df_plot))
         plot_config['vmax'] = max(100, np.max(df_plot))
 
@@ -536,7 +538,7 @@ if __name__ == "__main__":
     ## Parse arguments
     args = parser.parse_args()
     for key in ['plot_all_points','plot_all_lines','plot_final_events','save_final_event_info',
-                'print_ts_info','save_ts_info','plot_event_info']:
+                'print_ts_info','save_ts_info','plot_event_info','auto_limits']:
         exec(f"result_config['{key}'] = True if args.{key} else result_config['{key}']")
 
     file_name = args.file
@@ -555,19 +557,7 @@ if __name__ == "__main__":
 
     ts_info,df_MF_peaks = main()
 
-    import print_event
-    fout = open(outfile_body+'_event_Summary.txt', 'w')
-    print('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          ')
-    fout.write('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          \n')
-    for j in range(1,len(ts_info)+1):
-        Dic = print_event.print_event(ts_info,j)
-        # print()
-        print(f'# event{j}')
-        fout.write(f'# event{j}'+'\n')
-        for k in Dic.keys():
-            print(k+'   '+Dic[k])
-            fout.write(k+'   '+Dic[k]+'\n')
-    fout.close()
+    print_event.prettyPrint(ts_info,outfile_body)
 
     plt.show()
 
