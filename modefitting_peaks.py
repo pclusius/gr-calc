@@ -13,27 +13,16 @@ def find_peaks(df,file,start_date,fit_multimodes=False, n_samples=10000):
 
     file_name = file.split('.')[0]
 
-    # if fit_multimodes:
-
     #load the results
     try:
         with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json') as file:
             fits = json.load(file)
     except FileNotFoundError:
         fit_results = safe_fit_df(df,n_samples=n_samples)
-        # if new_fitting_functions:
-        #     print('Using new fitting')
-        #     # bp()
-        # else:
-        #     fit_results = af.fit_multimodes(df)
-        #     print('Using old fitting')
-        # XXX NEW functions
 
         #write json data to a file
         with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json', 'w') as output_file:
             json.dump(fit_results, output_file, indent=2)
-        # print(f"ERROR: No such file or directory '{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json'")
-        # print("Please change: fit_multimodes = True")
         with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json') as file:
             fits = json.load(file)
         # raise SystemExit
@@ -41,11 +30,8 @@ def find_peaks(df,file,start_date,fit_multimodes=False, n_samples=10000):
     #making a dataframe from json file
     rows_list = []
     for bfr in fits[0]:
-        # bp()
-        # if new_fitting_functions:
+
         timestamp = bfr[0][0]
-        # else:
-        #     timestamp = bfr
         ts = timestamp['time']
         peak_diams = timestamp['peak_diams']
 

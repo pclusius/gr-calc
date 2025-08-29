@@ -120,13 +120,7 @@ def main(ens_number=None):
     st = time() #progress
 
     # Step 1: Find mode fitting peaks
-    if args.ensemble>1:
-        df_MF_peaks = modefitting_peaks_ensemble.find_peaks(df,file_name,start_date,
-                                                n_samples=args.samples,ensemble_size=args.ensemble,
-                                                method = args.ensemble_method, ens_number = ens_number
-                                            )
-    else:
-        df_MF_peaks = modefitting_peaks.find_peaks(df,file_name,start_date,
+    df_MF_peaks = modefitting_peaks.find_peaks(df,file_name,start_date,
                                                 n_samples=args.samples
                                             )
     st = log_step("Peaks found!", st, 1)
@@ -347,7 +341,6 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
                         t, d = zip(*line['points'])
                         t_fit, d_fit = zip(*line['fitted points'])
                         gr = line['growth rate'] #nm/h
-                        # bp()
                         if method == 'MF':
                             # XXX kommentoi jos vain pisteet, ei viivoja
                             alpha = 0.1 if args.ensemble > 1 else 1
@@ -455,76 +448,10 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
         ax.set_title(f'growth rate unit: [nm/h]', loc='right', fontsize=8)
         # plt.title(f"file name: {file_name}, fitting method: {args.fitting}")
 
-
-
-    # PRINTING #
-    # if result_config['print_final_event_info']:
-    #     print('\n'+'*'*70)
-    #     print(f'Found {len(final_events)} growth events:')
-    #
-    #     for i, event in enumerate(final_events.values(),start=1):
-    #         print(f'\n*Event{i}*')
-    #
-    #         for line in event['lines']:
-    #             start_point = line['fitted points'][0]
-    #             end_point = line['fitted points'][-1]
-    #             gr = line['growth rate']
-    #             method = line['method']
-    #
-    #             #change time from days to dates
-    #             start = (num2date(start_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(start_point[1],2))
-    #             end = (num2date(end_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(end_point[1],2))
-    #
-    #             print(f"{start} → {end} | {gr:.2f}nm/h | {method}")
-    #
-    #         #estimated event growth rate
-    #         info = final_events[f'event{i}']
-    #
-    #         print(f"Estimated event growth rate: {info['avg growth rate']:.2f} ({info['min growth rate']:.2f}-{info['max growth rate']:.2f}) nm/h")
-    #         print(f"MAFE: {info['MAFE']:.3f}")
-    #         if event['num of lines'] > 2:
-    #             print('AFEs:')
-    #             for AFE in info['respective AFEs']:
-    #                 print(f'{AFE[0]}: {AFE[1]:.3f}')
-    #
-    # if result_config['print_ts_info']:
-    #     print('\n'+'*'*70)
-    #     print('Growth lines in each timestamp.')
-    #
-    #     for event_label,stamps in ts_info.items():
-    #         print(f'\n{event_label}:')
-    #
-    #         for ts_label,ts in stamps.items():
-    #             print(f'{ts_label}:')
-    #
-    #             for line in ts['lines']:
-    #                 start_point = line['fitted points'][0]
-    #                 end_point = line['fitted points'][-1]
-    #                 gr = line['growth rate']
-    #                 method = line['method']
-    #
-    #                 #change time from days to dates
-    #                 start = (num2date(start_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(start_point[1],2))
-    #                 end = (num2date(end_point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M'),round(end_point[1],2))
-    #
-    #                 print(f"{start} → {end} | {gr:.2f}nm/h | {method} ")
-    #
-    #             if not ts['lines']:
-    #                 print('No lines in this timestamp!')
-    #
-    #             if not any(val is None for val in [ts['avg growth rate'], ts['min growth rate'], ts['max growth rate']]):
-    #                 print(f"Estimated growth rate for timestamp: {ts['avg growth rate']:.2f} ({ts['min growth rate']:.2f}-{ts['max growth rate']:.2f}) nm/h")
     #
 
     # SAVING #
     if result_config['save_final_event_info']:
-        #change days to dates (type: str)
-        # for event in final_events.values():
-        #     for line in event['lines']:
-        #         bp()
-        #         for key in ['points','fitted points']:
-        #             line[key] = [(num2date(point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S'),point[1])
-        #                          for point in line[key]]
 
         with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_final_events.json', 'w') as output_file:
             json.dump(final_events, output_file, indent=2)
@@ -540,7 +467,6 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
         with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_ts_info.json', 'w') as output_file:
             json.dump(ts_info, output_file, indent=2)
 
-    # bp()
     # if False:
     def intp(df):
         X=df.iloc[:,:2].resample('5min').interpolate()
@@ -552,12 +478,9 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
         # pass
         first = True
         dfdf = None
-        # bp()
         for key in MF_gr_points:
 
-            # bp()
             # for points in MF_gr_points[key]['fitted points']:
-            # bp()
             datefloats = np.array(MF_gr_points[key]['fitted points']).T[0]
             linediams = np.array(MF_gr_points[key]['fitted points']).T[1]
             datetimes = [num2date(i) for i in datefloats]
@@ -569,7 +492,6 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
                     'line':[key]*len(datefloats),
                     'gr':[gr]*len(datefloats)
                     }))
-                # bp()
 
                 first = False
             else:
@@ -581,7 +503,6 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
                     })
                 dfdf =pd.concat([dfdf, intp(dfdf_0)])
 
-        # bp()
         return ts_info,df_MF_peaks,dfdf,MF_gr_points,df_plot
     else:
         return ts_info,df_MF_peaks
@@ -625,10 +546,6 @@ if __name__ == "__main__":
 
     if duration>0:
         end_date = (pd.to_datetime(start_date)+pd.Timedelta(f'{duration-1}D')).strftime('%Y-%m-%d')
-    # if args.fitting == 'old':
-    #     new_fitting_functions = False
-    # elif args.fitting == 'new':
-    #     new_fitting_functions = True
     if args.no_basefig:
         plot_config['vmin'] = 1e20
         plot_config['vmax'] = 5e20
@@ -639,8 +556,6 @@ if __name__ == "__main__":
 
     import print_event
     fout = open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_event_Summary.txt', 'w')
-    # for j in range(1,len(ts_info)+1):
-    #     print('event:', j, print_event.print_event(ts_info, j))
     print('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          ')
     fout.write('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          \n')
     for j in range(1,len(ts_info)+1):
@@ -652,124 +567,14 @@ if __name__ == "__main__":
             print(k+'   '+Dic[k])
             fout.write(k+'   '+Dic[k]+'\n')
     fout.close()
+
+
+
+
+
+
+
+
+
+
     #
-    # # bp()
-    # if args.ensemble==1 or args.ensemble_method==0:
-    #     ts_info,df_MF_peaks = main()
-    # elif args.ensemble>1 and args.ensemble_method==1:
-    #     for ens in range(args.ensemble):
-    #         # result_config['ens_number'] = ens
-    #         if ens==0:
-    #             ts_info_0,df_MF_peaks_0,dfdf_0, _,plotdata = main(ens)
-    #             # retu = main(ens)
-    #             # bp()
-    #         # os.system('rm *.json')
-    #         else:
-    #             ts_info_0,df_MF_peaks_0,dfdf, _,_ = main(ens)
-    #             # df_MF_peaks_0 = pd.concat([df_MF_peaks_0,df_MF_peaks]).sort_index()
-    #             dfdf_0 = pd.concat([dfdf_0,dfdf]).sort_index()
-    #             # linedf_0 = pd.concat([linedf_0,linedf]).sort_index()
-    #         # bp()
-    #     plt.figure()
-    #     plt.scatter(dfdf_0.index, dfdf_0['linediams'],s=1)
-    #     plt.gca().set_yscale('log')
-    #     plt.gca().set_ylim(3,1000)
-    #     plt.gca().set_xlim(0,1)
-    #
-    #
-    #
-    #
-    #     time = plotdata.index
-    #     dia = plotdata.columns
-    #     plt.pcolormesh(time, dia, plotdata.iloc[:,:].T, norm='log')
-    #     plt.gca().set_yscale('log')
-    #
-    #     from sklearn.cluster import AgglomerativeClustering
-    #     def clus(dist,df):
-    #         clusteringDist = AgglomerativeClustering(distance_threshold=dist, n_clusters=None, linkage='ward' ).fit(df.iloc[:,:2])
-    #         n_clust = clusteringDist.labels_.max()+1
-    #         return clusteringDist, n_clust
-    #
-    #     def scatterplot(df):
-    #         # plt.figure()
-    #         for i_c in range(n_clust):
-    #             x,y = df.index[clusteringDist.labels_==i_c], df['linediams'].iloc[clusteringDist.labels_==i_c]
-    #             plt.scatter(x,y,s=3, alpha=1)
-    #
-    #     dflog = dfdf_0.copy()
-    #     dflog['linediams']=dflog['linediams'].apply(lambda x: np.log10(x))
-    #     dist=0.7
-    #     clusteringDist, n_clust = clus(dist,dflog)
-    #
-    #     for i in range(n_clust):
-    #         msk = clusteringDist.labels_==i
-    #         time = dfdf_0.loc[msk].index.mean()
-    #         gr = dfdf_0.iloc[msk,3].mean()
-    #         dia = dfdf_0.iloc[msk,1].mean()
-    #         if np.logical_and(time>pd.to_datetime(start_date, utc=True),time<pd.to_datetime(end_date,utc=True)+pd.Timedelta('1D')):
-    #             plt.scatter(time, dia, c='k', s=4)
-    #             plt.text(time,dia,f'{gr:.2f}', fontsize=15)
-    #         # x,y = dfdf_0.index[clusteringDist.labels_==i], dfdf_0['linediams'].iloc[clusteringDist.labels_==i]
-    #         # plt.plot(x,y, lw=1)
-    #
-    #     scatterplot(dfdf_0)
-    #
-    #     plt.ion()
-    #     plt.show()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # clusteringDist = AgglomerativeClustering(distance_threshold=10, n_clusters=None, linkage='ward' ).fit(dfdf_0.iloc[:,:2])
-        # n_clust = clusteringDist.labels_.max()+1
-        #
-        #
-        # dist=300
-        # clusteringDist, n_clust = clus(dist,dfdf_0)
-        # dist=0.7
-        # clusteringDist, n_clust = clus(dist,dflog)
-        # ppp(dflog)
-        # import piecewise_regression
-    # plt.figure()
-    # plt.ylim(3,1000);plt.xlim(-0.01,0.99); plt.gca().set_yscale('log')
-        #
-        #     times = [(x[i]-x[0]).seconds/3600 for i in range(len(x))]
-        #     Y = y.values
-        #     pw_fit = piecewise_regression.Fit(times, Y,n_breakpoints=1)
-        #     print(f'Cluster {i_c}')
-        #     if pw_fit.get_results()['converged']:
-        #         print(f'alpha1: {pw_fit.get_results()["estimates"]['alpha1']['estimate']}')
-        #         pw_fit.plot_fit(color="red", linewidth=2)
-        #         pw_fit.plot_data(s=4)
-        #     else:
-        #         pw_fit = piecewise_regression.Fit(times, Y,n_breakpoints=2)
-        #         if pw_fit.get_results()['converged']:
-        #             print(f'alpha1: {pw_fit.get_results()["estimates"]['alpha1']['estimate']}')
-        #             print(f'alpha2: {pw_fit.get_results()["estimates"]['alpha2']['estimate']}')
-        #             pw_fit.plot_fit(color="red", linewidth=2)
-        #             pw_fit.plot_data(s=4)
-        #         else:
-        #             pw_fit = piecewise_regression.Fit(times, Y,n_breakpoints=3)
-        #             if pw_fit.get_results()['converged']:
-        #                 print(f'alpha1: {pw_fit.get_results()["estimates"]['alpha1']['estimate']}')
-        #                 print(f'alpha2: {pw_fit.get_results()["estimates"]['alpha2']['estimate']}')
-        #                 print(f'alpha3: {pw_fit.get_results()["estimates"]['alpha3']['estimate']}')
-        #                 pw_fit.plot_fit(color="red", linewidth=2)
-        #                 pw_fit.plot_data(s=4)
