@@ -453,7 +453,7 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
     # SAVING #
     if result_config['save_final_event_info']:
 
-        with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_final_events.json', 'w') as output_file:
+        with open(outfile_body+'_final_events.json', 'w') as output_file:
             json.dump(final_events, output_file, indent=2)
 
     if result_config['save_ts_info']:
@@ -464,7 +464,7 @@ def show_results(file_name,start_date,df_data,df_plot,df_MF_peaks,MF_gr_points,d
                     line['fitted points'] = [(num2date(point[0]).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S'),point[1])
                                     for point in line['fitted points']]
 
-        with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_ts_info.json', 'w') as output_file:
+        with open(outfile_body+'_ts_info.json', 'w') as output_file:
             json.dump(ts_info, output_file, indent=2)
 
     # if False:
@@ -551,11 +551,12 @@ if __name__ == "__main__":
         plot_config['vmax'] = 5e20
         plot_config['cmap'] = 'Greys'
 
+    outfile_body = f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}'
 
     ts_info,df_MF_peaks = main()
 
     import print_event
-    fout = open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_event_Summary.txt', 'w')
+    fout = open(outfile_body+'_event_Summary.txt', 'w')
     print('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          ')
     fout.write('# timestamp           MF  mean_diam  gr          AT  mean_diam  gr          MC  mean_diam  gr          \n')
     for j in range(1,len(ts_info)+1):

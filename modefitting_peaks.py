@@ -12,18 +12,19 @@ def find_peaks(df,file,start_date,fit_multimodes=False, n_samples=10000):
     '''
 
     file_name = file.split('.')[0]
+    jsonfile = f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json'
 
     #load the results
     try:
-        with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json') as file:
+        with open(jsonfile) as file:
             fits = json.load(file)
     except FileNotFoundError:
         fit_results = safe_fit_df(df,n_samples=n_samples)
 
         #write json data to a file
-        with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json', 'w') as output_file:
+        with open(jsonfile, 'w') as output_file:
             json.dump(fit_results, output_file, indent=2)
-        with open(f'{file_name[0:3]}{start_date[2:4]}{start_date[5:7]}{start_date[-2:]}_modefit.json') as file:
+        with open(jsonfile) as file:
             fits = json.load(file)
         # raise SystemExit
 
