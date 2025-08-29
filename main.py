@@ -151,7 +151,7 @@ def main(ens_number=None):
     if args.close_figs:
         plt.close()
     elif args.ensemble_method==0:
-        plt.ion()
+        # plt.ion()
         plt.show()
     else:
         plt.close()
