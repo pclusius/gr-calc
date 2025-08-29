@@ -150,11 +150,11 @@ def main(ens_number=None):
 
     if args.close_figs:
         plt.close()
-    elif args.ensemble_method==0:
-        # plt.ion()
-        plt.show()
-    else:
-        plt.close()
+    # elif args.ensemble_method==0:
+    #     # plt.ion()
+    #     plt.show()
+    # else:
+    #     plt.close()
 
     return ts_info
 
@@ -568,7 +568,7 @@ if __name__ == "__main__":
             fout.write(k+'   '+Dic[k]+'\n')
     fout.close()
 
-
+    plt.show()
 
 
 
